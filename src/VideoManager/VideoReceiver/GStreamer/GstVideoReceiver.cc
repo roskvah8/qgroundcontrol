@@ -8,18 +8,33 @@
  ****************************************************************************/
 
 //-----------------------------------------------------------------------------
-// Our pipeline look like this:
+// Pipeline architecture with audio support:
 //
-//              +-->queue-->_decoderValve[-->_decoder-->_videoSink]
-//              |
-// _source-->_tee
-//              |
-//              +-->queue-->_recorderValve[-->_fileSink]
+// _source (RTSP uses custom RTP depayloading via _onRtspPadAdded for multi-stream)
+//    |
+//    +--[video stream]-->_tee--+-->queue-->_decoderValve[-->_decoder-->_videoSink]
+//    |                         |
+//    |                         +-->queue-->_recorderValve--+
+//    |                                                      |
+//    +--[audio stream]-->_audioTee--+-->queue-->_audioDecoderValve--+--[encoded: via _decoder]--+-->audioconvert-->audioresample-->_audioVolume-->_audioSink
+//                                   |                                |
+//                                   |                                +--[raw G.711: direct]------+
+//                                   |
+//                                   +-->queue-->_audioRecorderValve--+
+//                                                                     |
+//                                                                     +-->[both branches]-->_fileSink (muxer: matroskamux/qtmux/mp4mux)
+//
+// Notes:
+// - Valves control data flow independently for decoder/recorder branches
+// - Raw audio (G.711 PCMU/PCMA, G.722) bypasses decodebin3, goes directly to sink
+// - Encoded audio (AAC, MP3, Opus) routes through decodebin3 for decoding
 //-----------------------------------------------------------------------------
 
 #include "GstVideoReceiver.h"
 #include "GStreamerHelpers.h"
 #include "QGCLoggingCategory.h"
+#include "SettingsManager.h"
+#include "VideoSettings.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QUrl>
@@ -51,6 +66,10 @@ GstVideoReceiver::~GstVideoReceiver()
 void GstVideoReceiver::start(uint32_t timeout)
 {
     if (_needDispatch()) {
+        // Cache audio settings from main thread before dispatching to worker thread
+        VideoSettings* videoSettings = SettingsManager::instance()->videoSettings();
+        _audioVolumePercent = videoSettings->audioVolume()->rawValue().toInt();
+
         _worker->dispatch([this, timeout]() { start(timeout); });
         return;
     }
@@ -79,9 +98,19 @@ void GstVideoReceiver::start(uint32_t timeout)
 
     GstElement *decoderQueue = nullptr;
     GstElement *recorderQueue = nullptr;
+    GstElement *audioDecoderQueue = nullptr;
+    GstElement *audioRecorderQueue = nullptr;
 
     do {
-        _tee = gst_element_factory_make("tee", nullptr);
+        // Pipeline architecture:
+        // - Separate tees for video and audio streams (allows independent decoder/recorder branches)
+        // - Valves control data flow to decoder and recorder independently
+        // - RTSP sources use custom RTP depayloading (_onRtspPadAdded) for multi-stream support
+        // - Raw audio (G.711 PCMU/PCMA) bypasses decodebin3 and routes directly to audio sink
+        // - Encoded audio (AAC, MP3, Opus) routes through decodebin3 for decoding
+
+        // VIDEO TEE - splits video stream to decoder and recorder
+        _tee = gst_element_factory_make("tee", "video_tee");
         if (!_tee)  {
             qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('tee') failed";
             break;
@@ -98,6 +127,20 @@ void GstVideoReceiver::start(uint32_t timeout)
         _teeProbeId = gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, _teeProbe, this, nullptr);
         gst_clear_object(&pad);
 
+        // AUDIO TEE
+        _audioTee = gst_element_factory_make("tee", "audio_tee");
+        if (!_audioTee)  {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audio_tee') failed";
+            break;
+        }
+
+        GstPad *audioPad = gst_element_get_static_pad(_audioTee, "sink");
+        if (audioPad) {
+            _audioTeeProbeId = gst_pad_add_probe(audioPad, GST_PAD_PROBE_TYPE_BUFFER, _teeProbe, this, nullptr);
+            gst_clear_object(&audioPad);
+        }
+
+        // VIDEO DECODER BRANCH
         decoderQueue = gst_element_factory_make("queue", nullptr);
         if (!decoderQueue)  {
             qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('queue') failed";
@@ -114,6 +157,7 @@ void GstVideoReceiver::start(uint32_t timeout)
                      "drop", TRUE,
                      nullptr);
 
+        // VIDEO RECORDER BRANCH
         recorderQueue = gst_element_factory_make("queue", nullptr);
         if (!recorderQueue)  {
             qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('queue') failed";
@@ -127,6 +171,40 @@ void GstVideoReceiver::start(uint32_t timeout)
         }
 
         g_object_set(_recorderValve,
+                     "drop", TRUE,
+                     nullptr);
+
+        // AUDIO DECODER BRANCH
+        audioDecoderQueue = gst_element_factory_make("queue", nullptr);
+        if (!audioDecoderQueue)  {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioDecoderQueue') failed";
+            break;
+        }
+
+        _audioDecoderValve = gst_element_factory_make("valve", nullptr);
+        if (!_audioDecoderValve)  {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioDecoderValve') failed";
+            break;
+        }
+
+        g_object_set(_audioDecoderValve,
+                     "drop", TRUE,
+                     nullptr);
+
+        // AUDIO RECORDER BRANCH
+        audioRecorderQueue = gst_element_factory_make("queue", nullptr);
+        if (!audioRecorderQueue)  {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioRecorderQueue') failed";
+            break;
+        }
+
+        _audioRecorderValve = gst_element_factory_make("valve", nullptr);
+        if (!_audioRecorderValve) {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioRecorderValve') failed";
+            break;
+        }
+
+        g_object_set(_audioRecorderValve,
                      "drop", TRUE,
                      nullptr);
 
@@ -146,7 +224,10 @@ void GstVideoReceiver::start(uint32_t timeout)
             break;
         }
 
-        gst_bin_add_many(GST_BIN(_pipeline), _source, _tee, decoderQueue, _decoderValve, recorderQueue, _recorderValve, nullptr);
+        gst_bin_add_many(GST_BIN(_pipeline), _source, _tee, _audioTee,
+                         decoderQueue, _decoderValve, recorderQueue, _recorderValve,
+                         audioDecoderQueue, _audioDecoderValve, audioRecorderQueue, _audioRecorderValve,
+                         nullptr);
 
         pipelineUp = true;
 
@@ -175,13 +256,25 @@ void GstVideoReceiver::start(uint32_t timeout)
             (void) g_signal_connect(_source, "pad-added", G_CALLBACK(_onNewPad), this);
         }
 
+        // Link VIDEO tee branches
         if (!gst_element_link_many(_tee, decoderQueue, _decoderValve, nullptr)) {
-            qCCritical(GstVideoReceiverLog) << "Unable to link decoder queue";
+            qCCritical(GstVideoReceiverLog) << "Unable to link video decoder queue";
             break;
         }
 
         if (!gst_element_link_many(_tee, recorderQueue, _recorderValve, nullptr)) {
-            qCCritical(GstVideoReceiverLog) << "Unable to link recorder queue";
+            qCCritical(GstVideoReceiverLog) << "Unable to link video recorder queue";
+            break;
+        }
+
+        // Link AUDIO tee branches
+        if (!gst_element_link_many(_audioTee, audioDecoderQueue, _audioDecoderValve, nullptr)) {
+            qCCritical(GstVideoReceiverLog) << "Unable to link audio decoder queue";
+            break;
+        }
+
+        if (!gst_element_link_many(_audioTee, audioRecorderQueue, _audioRecorderValve, nullptr)) {
+            qCCritical(GstVideoReceiverLog) << "Unable to link audio recorder queue";
             break;
         }
 
@@ -296,6 +389,10 @@ void GstVideoReceiver::stop()
             _shutdownDecodingBranch();
         }
 
+        if (_audioSink) {
+            _shutdownAudioBranch();
+        }
+
         GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-stopped");
 
         gst_clear_object(&_pipeline);
@@ -304,7 +401,11 @@ void GstVideoReceiver::stop()
         _recorderValve = nullptr;
         _decoderValve = nullptr;
         _tee = nullptr;
+        _audioTee = nullptr;
+        _audioDecoderValve = nullptr;
         _source = nullptr;
+        _isRtspSource = false;
+        _audioDecoderLinked = false;
 
         _lastSourceFrameTime = 0;
 
@@ -534,6 +635,21 @@ void GstVideoReceiver::takeScreenshot(const QString &imageFile)
     _dispatchSignal([this]() { emit onTakeScreenshotComplete(STATUS_NOT_IMPLEMENTED); });
 }
 
+void GstVideoReceiver::updateAudioVolume()
+{
+    // This is called from main thread - safe to access VideoSettings
+    VideoSettings* videoSettings = SettingsManager::instance()->videoSettings();
+    _audioVolumePercent = videoSettings->audioVolume()->rawValue().toInt();
+
+    if (_needDispatch()) {
+        _worker->dispatch([this]() { _updateAudioVolume(); });
+        return;
+    }
+
+    _updateAudioVolume();
+}
+
+
 void GstVideoReceiver::_watchdog()
 {
     _worker->dispatch([this]() {
@@ -760,6 +876,7 @@ GstElement *GstVideoReceiver::_makeSource(const QString &input)
         (void) gst_element_foreach_src_pad(source, _padProbe, &probeRes);
 
         if (probeRes & 1) {
+            // Static pads - link directly to parsebin
             if ((probeRes & 2) && (_buffer >= 0)) {
                 buffer = gst_element_factory_make("rtpjitterbuffer", nullptr);
                 if (!buffer) {
@@ -779,11 +896,20 @@ GstElement *GstVideoReceiver::_makeSource(const QString &input)
                     break;
                 }
             }
+            (void) g_signal_connect(parser, "pad-added", G_CALLBACK(_wrapWithGhostPad), nullptr);
         } else {
-            (void) g_signal_connect(source, "pad-added", G_CALLBACK(_linkPad), parser);
+            // Dynamic pads - use appropriate handler
+            if (isRtsp) {
+                // RTSP: Handle multiple streams (video + audio) via custom RTP depayloading
+                qCDebug(GstVideoReceiverLog) << "RTSP source: registering custom pad handler for multi-stream support";
+                _isRtspSource = true;
+                (void) g_signal_connect(source, "pad-added", G_CALLBACK(_onRtspPadAdded), bin);
+            } else {
+                // Other dynamic sources: use standard parsebin routing
+                (void) g_signal_connect(source, "pad-added", G_CALLBACK(_linkPad), parser);
+                (void) g_signal_connect(parser, "pad-added", G_CALLBACK(_wrapWithGhostPad), nullptr);
+            }
         }
-
-        (void) g_signal_connect(parser, "pad-added", G_CALLBACK(_wrapWithGhostPad), nullptr);
 
         source = tsdemux = buffer = parser = nullptr;
 
@@ -889,35 +1015,181 @@ GstElement *GstVideoReceiver::_makeFileSink(const QString &videoFile, FILE_FORMA
 
 void GstVideoReceiver::_onNewSourcePad(GstPad *pad)
 {
-    // FIXME: check for caps - if this is not video stream (and preferably - one of these which we have to support) then simply skip it
-    if (!gst_element_link(_source, _tee)) {
-        qCCritical(GstVideoReceiverLog) << "Unable to link source";
-        return;
+    gchar *padName = gst_pad_get_name(pad);
+
+    // Determine stream type from caps
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(pad, nullptr);
     }
 
-    if (!_streaming) {
-        _streaming = true;
-        qCDebug(GstVideoReceiverLog) << "Streaming started" << _uri;
-        _dispatchSignal([this]() { emit streamingChanged(_streaming); });
+    bool isVideo = false;
+    bool isAudio = false;
+    bool isRawAudio = false;  // Raw audio from G.711 codecs (PCMU/PCMA) - already decoded by RTP depayloader
+
+    if (caps && !gst_caps_is_any(caps) && gst_caps_get_size(caps) > 0) {
+        const GstStructure *structure = gst_caps_get_structure(caps, 0);
+        if (structure) {
+            const gchar *name = gst_structure_get_name(structure);
+            if (name) {
+                if (g_str_has_prefix(name, "video/")) {
+                    isVideo = true;
+                } else if (g_str_has_prefix(name, "audio/")) {
+                    isAudio = true;
+                    // G.711 (PCMU/PCMA) decoders output raw audio directly - bypass decodebin3
+                    if (g_strcmp0(name, "audio/x-raw") == 0) {
+                        isRawAudio = true;
+                    }
+                }
+            }
+        }
+        gst_caps_unref(caps);
     }
 
-    (void) gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, _eosProbe, this, nullptr);
-    if (!_videoSink) {
-        return;
+    qCDebug(GstVideoReceiverLog) << "New source pad:" << (padName ? padName : "NULL")
+                                  << "video=" << isVideo << "audio=" << isAudio << "raw=" << isRawAudio;
+
+    // Create decoder for encoded streams (skip for raw audio)
+    if (!_decoder && (isVideo || (isAudio && !isRawAudio))) {
+        if (!_addDecoder(_decoderValve)) {
+            qCCritical(GstVideoReceiverLog) << "_addDecoder() failed for" << (isVideo ? "video" : "audio") << "stream";
+            g_free(padName);
+            return;
+        }
+        qCDebug(GstVideoReceiverLog) << "Decoder created for" << (isVideo ? "video" : "audio") << "stream";
     }
 
-    GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-with-new-source-pad");
+    // Route to appropriate tee
+    if (isVideo) {
+        if (!_tee) {
+            qCCritical(GstVideoReceiverLog) << "ERROR: _tee is NULL!";
+            g_free(padName);
+            return;
+        }
 
-    if (!_addDecoder(_decoderValve)) {
-        qCCritical(GstVideoReceiverLog) << "_addDecoder() failed";
-        return;
+        // Get tee's static sink pad (tee has ONE sink, multiple src_%u outputs)
+        GstPad *teeSink = gst_element_get_static_pad(_tee, "sink");
+        if (!teeSink) {
+            qCCritical(GstVideoReceiverLog) << "Failed to get tee static sink pad";
+            g_free(padName);
+            return;
+        }
+
+        // Check if sink pad is already linked
+        if (gst_pad_is_linked(teeSink)) {
+            qCWarning(GstVideoReceiverLog) << "Video tee sink pad already linked - skipping";
+            gst_object_unref(teeSink);
+            g_free(padName);
+            return;
+        }
+
+        if (gst_pad_link(pad, teeSink) != GST_PAD_LINK_OK) {
+            qCCritical(GstVideoReceiverLog) << "Failed to link video pad to tee";
+            gst_object_unref(teeSink);
+            g_free(padName);
+            return;
+        }
+        gst_object_unref(teeSink);
+
+        qCDebug(GstVideoReceiverLog) << "Video pad linked to tee";
+
+        if (!_streaming) {
+            _streaming = true;
+            qCDebug(GstVideoReceiverLog) << "Streaming started" << _uri;
+            _dispatchSignal([this]() { emit streamingChanged(_streaming); });
+        }
+
+        (void) gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, _eosProbe, this, nullptr);
+
+        if (!_videoSink) {
+            g_free(padName);
+            return;
+        }
+
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-with-new-source-pad");
+
+        g_object_set(_decoderValve, "drop", FALSE, nullptr);
+        qCDebug(GstVideoReceiverLog) << "Video decoding started";
+
+    } else if (isAudio) {
+        if (!_audioTee) {
+            qCCritical(GstVideoReceiverLog) << "ERROR: _audioTee is NULL!";
+            g_free(padName);
+            return;
+        }
+
+        // Get audio tee's static sink pad
+        GstPad *audioTeeSink = gst_element_get_static_pad(_audioTee, "sink");
+        if (!audioTeeSink) {
+            qCCritical(GstVideoReceiverLog) << "Failed to get audio tee static sink pad";
+            g_free(padName);
+            return;
+        }
+
+        if (gst_pad_is_linked(audioTeeSink)) {
+            qCWarning(GstVideoReceiverLog) << "Audio tee sink pad already linked - skipping";
+            gst_object_unref(audioTeeSink);
+            g_free(padName);
+            return;
+        }
+
+        if (gst_pad_link(pad, audioTeeSink) != GST_PAD_LINK_OK) {
+            qCCritical(GstVideoReceiverLog) << "Failed to link audio pad to audio tee";
+            gst_object_unref(audioTeeSink);
+            g_free(padName);
+            return;
+        }
+        gst_object_unref(audioTeeSink);
+
+        qCDebug(GstVideoReceiverLog) << "Audio pad linked to tee";
+
+        // Raw audio (PCMU/PCMA) bypasses decodebin3 and goes directly to audio sink
+        if (isRawAudio) {
+            GstPad *valveSrcPad = gst_element_get_static_pad(_audioDecoderValve, "src");
+            if (valveSrcPad) {
+                if (_addAudioSink(valveSrcPad)) {
+                    _audioDecoderLinked = true;
+                    qCDebug(GstVideoReceiverLog) << "Raw audio routed to sink (bypassed decoder)";
+                } else {
+                    qCCritical(GstVideoReceiverLog) << "Failed to link raw audio to audio sink";
+                }
+                gst_object_unref(valveSrcPad);
+            } else {
+                qCCritical(GstVideoReceiverLog) << "Failed to get valve src pad for raw audio";
+            }
+        } else {
+            // Encoded audio (AAC, MP3, Opus, etc.) routes through decodebin3
+            if (!_audioDecoderLinked && _decoder) {
+                GstPad *decoderSinkPad = gst_element_request_pad_simple(_decoder, "sink_%u");
+                if (!decoderSinkPad) {
+                    qCCritical(GstVideoReceiverLog) << "Failed to get decoder sink pad for audio";
+                } else {
+                    GstPad *valveSrcPad = gst_element_get_static_pad(_audioDecoderValve, "src");
+                    if (valveSrcPad) {
+                        GstPadLinkReturn linkRet = gst_pad_link(valveSrcPad, decoderSinkPad);
+                        if (linkRet == GST_PAD_LINK_OK) {
+                            _audioDecoderLinked = true;
+                            qCDebug(GstVideoReceiverLog) << "Audio decoder valve linked to decoder";
+                        } else {
+                            qCCritical(GstVideoReceiverLog) << "Failed to link audio decoder valve to decoder, error:" << linkRet;
+                        }
+                        gst_object_unref(valveSrcPad);
+                    } else {
+                        qCCritical(GstVideoReceiverLog) << "Failed to get valve src pad";
+                    }
+                    gst_object_unref(decoderSinkPad);
+                }
+            }
+        }
+
+        g_object_set(_audioDecoderValve, "drop", FALSE, nullptr);
+        qCDebug(GstVideoReceiverLog) << "Audio decoding started";
+
+    } else {
+        qCWarning(GstVideoReceiverLog) << "Unknown stream type, skipping";
     }
 
-    g_object_set(_decoderValve,
-                 "drop", FALSE,
-                 nullptr);
-
-    qCDebug(GstVideoReceiverLog) << "Decoding started" << _uri;
+    g_free(padName);
 }
 
 void GstVideoReceiver::_logDecodebin3SelectedCodec(GstElement *decodebin3)
@@ -957,15 +1229,66 @@ void GstVideoReceiver::_logDecodebin3SelectedCodec(GstElement *decodebin3)
 
 void GstVideoReceiver::_onNewDecoderPad(GstPad *pad)
 {
-    qCDebug(GstVideoReceiverLog) << "_onNewDecoderPad" << _uri;
-
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(_pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline-with-new-decoder-pad");
 
     // We should now know what codec decodebin3 selected.
     _logDecodebin3SelectedCodec(_decoder);
 
-    if (!_addVideoSink(pad)) {
-        qCCritical(GstVideoReceiverLog) << "_addVideoSink() failed";
+    // Get pad name for fallback detection
+    gchar *padName = gst_pad_get_name(pad);
+
+    // Determine if this is audio or video pad
+    bool isAudio = false;
+    bool isVideo = false;
+
+    // Try to get caps
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(pad, nullptr);
+    }
+
+    if (caps && !gst_caps_is_any(caps) && gst_caps_get_size(caps) > 0) {
+        const GstStructure *structure = gst_caps_get_structure(caps, 0);
+        if (structure) {
+            const gchar *structName = gst_structure_get_name(structure);
+            if (structName) {
+                if (g_str_has_prefix(structName, "audio/")) {
+                    isAudio = true;
+                } else if (g_str_has_prefix(structName, "video/")) {
+                    isVideo = true;
+                }
+            }
+        }
+        gst_caps_unref(caps);
+    }
+
+    // Fallback to pad name if caps didn't help
+    if (!isAudio && !isVideo && padName) {
+        if (g_str_has_prefix(padName, "audio_")) {
+            isAudio = true;
+        } else if (g_str_has_prefix(padName, "video_")) {
+            isVideo = true;
+        }
+    }
+
+    g_free(padName);
+
+    // Connect to appropriate sink
+    if (isAudio) {
+        qCDebug(GstVideoReceiverLog) << "Routing decoded audio to audio sink";
+        if (!_addAudioSink(pad)) {
+            qCCritical(GstVideoReceiverLog) << "_addAudioSink() failed";
+        }
+    } else if (isVideo) {
+        qCDebug(GstVideoReceiverLog) << "Routing decoded video to video sink";
+        if (!_addVideoSink(pad)) {
+            qCCritical(GstVideoReceiverLog) << "_addVideoSink() failed";
+        }
+    } else {
+        qCWarning(GstVideoReceiverLog) << "Unknown decoder pad type, using video sink as default";
+        if (!_addVideoSink(pad)) {
+            qCCritical(GstVideoReceiverLog) << "_addVideoSink() failed";
+        }
     }
 }
 
@@ -1120,6 +1443,172 @@ void GstVideoReceiver::_noteVideoSinkFrame()
 void GstVideoReceiver::_noteEndOfStream()
 {
     _endOfStream = true;
+}
+
+bool GstVideoReceiver::_addAudioSink(GstPad *pad)
+{
+    if (_audioSink) {
+        qCWarning(GstVideoReceiverLog) << "Audio sink already exists";
+        return false;
+    }
+
+    bool success = false;
+
+    do {
+        // Create audio processing elements
+        _audioConvert = gst_element_factory_make("audioconvert", nullptr);
+        if (!_audioConvert) {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioconvert') failed";
+            break;
+        }
+
+        _audioResample = gst_element_factory_make("audioresample", nullptr);
+        if (!_audioResample) {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('audioresample') failed";
+            break;
+        }
+
+        _audioVolume = gst_element_factory_make("volume", nullptr);
+        if (!_audioVolume) {
+            qCCritical(GstVideoReceiverLog) << "gst_element_factory_make('volume') failed";
+            break;
+        }
+
+                // Set initial volume
+        _updateAudioVolume();
+
+        // Create platform-appropriate audio sink
+#if defined(Q_OS_WIN)
+        _audioSink = gst_element_factory_make("wasapisink", nullptr);
+#elif defined(Q_OS_MACOS)
+        _audioSink = gst_element_factory_make("osxaudiosink", nullptr);
+#elif defined(Q_OS_LINUX)
+        _audioSink = gst_element_factory_make("pulsesink", nullptr);
+        if (!_audioSink) {
+            _audioSink = gst_element_factory_make("alsasink", nullptr);
+        }
+#elif defined(Q_OS_ANDROID)
+        _audioSink = gst_element_factory_make("openslessink", nullptr);
+#elif defined(Q_OS_IOS)
+        _audioSink = gst_element_factory_make("osxaudiosink", nullptr);
+#else
+        _audioSink = gst_element_factory_make("autoaudiosink", nullptr);
+#endif
+
+        if (!_audioSink) {
+            qCCritical(GstVideoReceiverLog) << "Failed to create audio sink";
+            break;
+        }
+
+                // Add elements to pipeline
+        gst_bin_add_many(GST_BIN(_pipeline),
+                         _audioConvert, _audioResample, _audioVolume, _audioSink,
+                         nullptr);
+
+                // Link audio elements: audioconvert → audioresample → volume → sink
+        if (!gst_element_link_many(_audioConvert, _audioResample, _audioVolume, _audioSink, nullptr)) {
+            qCCritical(GstVideoReceiverLog) << "Failed to link audio elements";
+            break;
+        }
+
+                // Link decoder pad to audioconvert
+        GstPad *sinkPad = gst_element_get_static_pad(_audioConvert, "sink");
+        if (!sinkPad) {
+            qCCritical(GstVideoReceiverLog) << "Failed to get audio sink pad";
+            break;
+        }
+
+        GstPadLinkReturn ret = gst_pad_link(pad, sinkPad);
+        gst_object_unref(sinkPad);
+
+        if (ret != GST_PAD_LINK_OK) {
+            qCCritical(GstVideoReceiverLog) << "Failed to link decoder to audio sink:" << ret;
+            break;
+        }
+
+                // Sync element states
+        if (!gst_element_sync_state_with_parent(_audioConvert) ||
+            !gst_element_sync_state_with_parent(_audioResample) ||
+            !gst_element_sync_state_with_parent(_audioVolume) ||
+            !gst_element_sync_state_with_parent(_audioSink)) {
+            qCCritical(GstVideoReceiverLog) << "Failed to sync audio element states";
+            break;
+        }
+
+        qCDebug(GstVideoReceiverLog) << "Audio sink added successfully";
+        success = true;
+
+    } while(0);
+
+    if (!success) {
+        _shutdownAudioBranch();
+    } else {
+        _dispatchSignal([this]() { emit audioAvailableChanged(true); });
+    }
+
+    return success;
+}
+
+void GstVideoReceiver::_updateAudioVolume()
+{
+    if (!_audioVolume) {
+        return;
+    }
+
+    // Use cached member variable (safe from worker thread)
+    double volume = _audioVolumePercent / 100.0;
+
+    g_object_set(_audioVolume, "volume", volume, nullptr);
+    qCDebug(GstVideoReceiverLog) << "Audio volume set to" << volume;
+}
+
+void GstVideoReceiver::_shutdownAudioBranch()
+{
+    bool hadAudio = (_audioSink != nullptr);
+
+    if (_audioSink) {
+        GstObject *parent = gst_element_get_parent(_audioSink);
+        if (parent) {
+            gst_element_set_state(_audioSink, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(_pipeline), _audioSink);
+            gst_clear_object(&parent);
+        }
+        _audioSink = nullptr;
+    }
+
+    if (_audioVolume) {
+        GstObject *parent = gst_element_get_parent(_audioVolume);
+        if (parent) {
+            gst_element_set_state(_audioVolume, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(_pipeline), _audioVolume);
+            gst_clear_object(&parent);
+        }
+        _audioVolume = nullptr;
+    }
+
+    if (_audioResample) {
+        GstObject *parent = gst_element_get_parent(_audioResample);
+        if (parent) {
+            gst_element_set_state(_audioResample, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(_pipeline), _audioResample);
+            gst_clear_object(&parent);
+        }
+        _audioResample = nullptr;
+    }
+
+    if (_audioConvert) {
+        GstObject *parent = gst_element_get_parent(_audioConvert);
+        if (parent) {
+            gst_element_set_state(_audioConvert, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(_pipeline), _audioConvert);
+            gst_clear_object(&parent);
+        }
+        _audioConvert = nullptr;
+    }
+
+    if (hadAudio) {
+        _dispatchSignal([this]() { emit audioAvailableChanged(false); });
+    }
 }
 
 bool GstVideoReceiver::_unlinkBranch(GstElement *from)
@@ -1300,6 +1789,62 @@ gboolean GstVideoReceiver::_onBusMessage(GstBus * /* bus */, GstMessage *msg, gp
         gst_clear_message(&forward_msg);
         break;
     }
+    case GST_MESSAGE_STREAM_COLLECTION: {
+        // For RTSP sources, skip SELECT_STREAMS handling because pads are already
+        // being dynamically linked via _onRtspPadAdded. Using SELECT_STREAMS with
+        // RTSP causes a race condition where the stream collection may arrive before
+        // all pads are added, resulting in only the first stream being selected.
+        if (pThis->_isRtspSource) {
+            qCDebug(GstVideoReceiverLog) << "RTSP: skipping SELECT_STREAMS (pads linked via _onRtspPadAdded)";
+            break;
+        }
+
+        GstStreamCollection *collection = nullptr;
+        gst_message_parse_stream_collection(msg, &collection);
+
+        if (collection) {
+            guint numStreams = gst_stream_collection_get_size(collection);
+            qCDebug(GstVideoReceiverLog) << "Stream collection:" << numStreams << "streams available";
+
+            GList *streamIds = nullptr;
+
+            for (guint i = 0; i < numStreams; i++) {
+                GstStream *stream = gst_stream_collection_get_stream(collection, i);
+                if (stream) {
+                    const gchar *streamId = gst_stream_get_stream_id(stream);
+                    GstStreamType streamType = gst_stream_get_stream_type(stream);
+
+                    const char *typeStr = (streamType == GST_STREAM_TYPE_VIDEO ? "video" :
+                                          streamType == GST_STREAM_TYPE_AUDIO ? "audio" :
+                                          streamType == GST_STREAM_TYPE_TEXT ? "text" : "other");
+
+                    // Select video and audio streams (ignore text/subtitle streams)
+                    if (streamType == GST_STREAM_TYPE_VIDEO || streamType == GST_STREAM_TYPE_AUDIO) {
+                        streamIds = g_list_append(streamIds, g_strdup(streamId));
+                        qCDebug(GstVideoReceiverLog) << "Selecting" << typeStr << "stream:" << streamId;
+                    } else {
+                        qCDebug(GstVideoReceiverLog) << "Skipping" << typeStr << "stream:" << streamId;
+                    }
+                }
+            }
+
+            // Send SELECT_STREAMS event to select both video and audio
+            if (streamIds) {
+                qCDebug(GstVideoReceiverLog) << "Sending SELECT_STREAMS event for" << g_list_length(streamIds) << "streams";
+                GstEvent *selectEvent = gst_event_new_select_streams(streamIds);
+                gst_element_send_event(pThis->_pipeline, selectEvent);
+                g_list_free_full(streamIds, g_free);
+            } else {
+                qCWarning(GstVideoReceiverLog) << "No video/audio streams found in collection";
+            }
+
+            gst_object_unref(collection);
+        } else {
+            qCWarning(GstVideoReceiverLog) << "Failed to parse stream collection";
+        }
+
+        break;
+    }
     default:
         break;
     }
@@ -1359,6 +1904,141 @@ void GstVideoReceiver::_linkPad(GstElement *element, GstPad *pad, gpointer data)
     }
 
     g_clear_pointer(&name, g_free);
+}
+
+void GstVideoReceiver::_onRtspPadAdded(GstElement *rtsp, GstPad *pad, gpointer data)
+{
+    Q_UNUSED(rtsp);
+    GstElement *bin = GST_ELEMENT(data);
+
+    // Inspect RTP payload type from caps
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        qCWarning(GstVideoReceiverLog) << "RTSP pad has no caps";
+        return;
+    }
+
+    if (gst_caps_get_size(caps) == 0) {
+        gst_caps_unref(caps);
+        qCWarning(GstVideoReceiverLog) << "RTSP pad has empty caps";
+        return;
+    }
+
+    const GstStructure *structure = gst_caps_get_structure(caps, 0);
+    const gchar *encodingName = gst_structure_get_string(structure, "encoding-name");
+    const gchar *media = gst_structure_get_string(structure, "media");
+
+    qCDebug(GstVideoReceiverLog) << "RTSP pad:" << (media ? media : "?") << "/" << (encodingName ? encodingName : "?");
+
+    if (!encodingName) {
+        gst_caps_unref(caps);
+        qCWarning(GstVideoReceiverLog) << "No encoding-name in RTP caps";
+        return;
+    }
+
+    gst_caps_unref(caps);
+
+    // Create RTP depayloader and parser/decoder based on encoding
+    GstElement *depay = nullptr;
+    GstElement *parse = nullptr;
+
+    // Video codecs
+    if (g_strcmp0(encodingName, "H264") == 0) {
+        depay = gst_element_factory_make("rtph264depay", nullptr);
+        parse = gst_element_factory_make("h264parse", nullptr);
+    } else if (g_strcmp0(encodingName, "H265") == 0) {
+        depay = gst_element_factory_make("rtph265depay", nullptr);
+        parse = gst_element_factory_make("h265parse", nullptr);
+    }
+    // Audio codecs - encoded
+    else if (g_strcmp0(encodingName, "MPEG4-GENERIC") == 0) {
+        // AAC - most common for RTSP streams
+        depay = gst_element_factory_make("rtpmp4gdepay", nullptr);
+        parse = gst_element_factory_make("aacparse", nullptr);
+    } else if (g_strcmp0(encodingName, "MPA") == 0 || g_strcmp0(encodingName, "MPEG1") == 0) {
+        // MP3
+        depay = gst_element_factory_make("rtpmpadepay", nullptr);
+        parse = gst_element_factory_make("mpegaudioparse", nullptr);
+    } else if (g_strcmp0(encodingName, "OPUS") == 0) {
+        // Opus - WebRTC, modern streaming
+        depay = gst_element_factory_make("rtpopusdepay", nullptr);
+        parse = gst_element_factory_make("opusdec", nullptr);
+    }
+    // Audio codecs - G.711 (outputs raw audio, bypass decodebin3)
+    else if (g_strcmp0(encodingName, "PCMU") == 0) {
+        // G.711 μ-law - common in IP cameras
+        depay = gst_element_factory_make("rtppcmudepay", nullptr);
+        parse = gst_element_factory_make("mulawdec", nullptr);  // Decoder, not parser
+    } else if (g_strcmp0(encodingName, "PCMA") == 0) {
+        // G.711 A-law - common in IP cameras
+        depay = gst_element_factory_make("rtppcmadepay", nullptr);
+        parse = gst_element_factory_make("alawdec", nullptr);  // Decoder, not parser
+    } else if (g_strcmp0(encodingName, "G722") == 0) {
+        // G.722 wideband audio - professional IP cameras
+        depay = gst_element_factory_make("rtpg722depay", nullptr);
+        parse = gst_element_factory_make("avdec_g722", nullptr);  // Decoder, not parser
+    } else {
+        qCWarning(GstVideoReceiverLog) << "Unsupported RTP encoding:" << encodingName;
+        return;
+    }
+
+    if (!depay || !parse) {
+        qCCritical(GstVideoReceiverLog) << "Failed to create depayloader/parser for" << encodingName;
+        gst_clear_object(&depay);
+        gst_clear_object(&parse);
+        return;
+    }
+
+    // Add elements to bin and link
+    gst_bin_add_many(GST_BIN(bin), depay, parse, nullptr);
+
+    GstPad *depaysink = gst_element_get_static_pad(depay, "sink");
+    if (!depaysink) {
+        qCCritical(GstVideoReceiverLog) << "Failed to get depay sink pad";
+        return;
+    }
+
+    if (gst_pad_link(pad, depaysink) != GST_PAD_LINK_OK) {
+        qCCritical(GstVideoReceiverLog) << "Failed to link RTSP pad to depayloader";
+        gst_object_unref(depaysink);
+        return;
+    }
+    gst_object_unref(depaysink);
+
+    if (!gst_element_link(depay, parse)) {
+        qCCritical(GstVideoReceiverLog) << "Failed to link depay to parser/decoder";
+        return;
+    }
+
+    // Create ghost pad to expose this stream outside the bin
+    GstPad *parseSrc = gst_element_get_static_pad(parse, "src");
+    if (!parseSrc) {
+        qCCritical(GstVideoReceiverLog) << "Failed to get parser src pad";
+        return;
+    }
+
+    static int ghostCounter = 0;
+    gchar *ghostName = g_strdup_printf("src_%d", ghostCounter++);
+    GstPad *ghostPad = gst_ghost_pad_new(ghostName, parseSrc);
+    g_free(ghostName);
+    gst_object_unref(parseSrc);
+
+    if (!ghostPad) {
+        qCCritical(GstVideoReceiverLog) << "Failed to create ghost pad";
+        return;
+    }
+
+    gst_pad_set_active(ghostPad, TRUE);
+    if (!gst_element_add_pad(bin, ghostPad)) {
+        qCCritical(GstVideoReceiverLog) << "Failed to add ghost pad to bin";
+        return;
+    }
+
+    // Sync element states with parent
+    gst_element_sync_state_with_parent(depay);
+    gst_element_sync_state_with_parent(parse);
+
+    qCDebug(GstVideoReceiverLog) << "Added" << encodingName << "RTP depayloader and parser";
 }
 
 gboolean GstVideoReceiver::_padProbe(GstElement *element, GstPad *pad, gpointer user_data)
@@ -1491,7 +2171,7 @@ GstVideoWorker::~GstVideoWorker()
 
 bool GstVideoWorker::needDispatch() const
 {
-    return (QThread::currentThread() != this);
+    return (QThread::currentThread() != static_cast<const QThread*>(this));
 }
 
 void GstVideoWorker::dispatch(Task task)
@@ -1505,9 +2185,9 @@ void GstVideoWorker::shutdown()
 {
     if (needDispatch()) {
         dispatch([this]() { _shutdown = true; });
-        (void) QThread::wait(2000);
+        (void) wait(2000);
     } else {
-        QThread::quit();
+        quit();
     }
 }
 

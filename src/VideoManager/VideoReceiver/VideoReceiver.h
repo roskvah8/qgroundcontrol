@@ -76,6 +76,7 @@ signals:
     void recordingChanged(bool active);
     void recordingStarted(const QString &filename);
     void videoSizeChanged(QSize size);
+    void audioAvailableChanged(bool available);
 
     void sinkChanged(void *sink);
     void nameChanged(const QString &name);

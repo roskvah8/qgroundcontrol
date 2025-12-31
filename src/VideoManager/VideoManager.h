@@ -50,6 +50,8 @@ class VideoManager : public QObject
     Q_PROPERTY(QSize    videoSize               READ videoSize                                  NOTIFY videoSizeChanged)
     Q_PROPERTY(QString  imageFile               READ imageFile                                  NOTIFY imageFileChanged)
     Q_PROPERTY(QString  uvcVideoSourceID        READ uvcVideoSourceID                           NOTIFY uvcVideoSourceIDChanged)
+    Q_PROPERTY(double   audioVolume             READ audioVolume            WRITE setAudioVolume NOTIFY audioVolumeChanged)
+    Q_PROPERTY(bool     audioAvailable          READ audioAvailable                              NOTIFY audioAvailableChanged)
 
 public:
     explicit VideoManager(QObject *parent = nullptr);
@@ -64,6 +66,7 @@ public:
     Q_INVOKABLE void startVideo();
     Q_INVOKABLE void stopRecording();
     Q_INVOKABLE void stopVideo();
+    Q_INVOKABLE void setAudioVolume(double volume);
 
     void init(QQuickWindow *mainWindow);
     void cleanup();
@@ -84,6 +87,8 @@ public:
     QString imageFile() const { return _imageFile; }
     QString uvcVideoSourceID() const { return _uvcVideoSourceID; }
     void setfullScreen(bool on);
+    double audioVolume() const;
+    bool audioAvailable() const;
     static bool gstreamerEnabled();
     static bool qtmultimediaEnabled();
     static bool uvcEnabled();
@@ -103,11 +108,14 @@ signals:
     void streamingChanged();
     void uvcVideoSourceIDChanged();
     void videoSizeChanged();
+    void audioVolumeChanged(double volume);
+    void audioAvailableChanged(bool available);
 
 private slots:
     void _communicationLostChanged(bool communicationLost);
     void _setActiveVehicle(Vehicle *vehicle);
     void _videoSourceChanged();
+    void _audioVolumeChanged();
 
 private:
     void _initAfterQmlIsReady();
@@ -138,6 +146,7 @@ private:
     QString _uvcVideoSourceID;
     Vehicle *_activeVehicle = nullptr;
     QQuickWindow *_mainWindow = nullptr;
+    bool _audioAvailable = false;
 };
 
 /*===========================================================================*/
