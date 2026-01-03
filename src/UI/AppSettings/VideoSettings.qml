@@ -79,6 +79,19 @@ SettingsPage {
     }
 
     SettingsGroupLayout {
+        Layout.fillWidth: true
+        heading: qsTr("Audio Settings")
+        visible: !_videoSourceDisabled && !_videoAutoStreamConfig && _isRTSP
+
+        LabelledFactTextField {
+            Layout.fillWidth: true
+            label: qsTr("Volume")
+            fact: _videoSettings.audioVolume
+            visible: fact.visible
+        }
+    }
+
+    SettingsGroupLayout {
         Layout.fillWidth:   true
         heading:            qsTr("Settings")
         visible:            !_videoSourceDisabled

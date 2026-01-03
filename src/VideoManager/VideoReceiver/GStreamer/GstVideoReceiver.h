@@ -68,6 +68,7 @@ public slots:
     void startRecording(const QString &videoFile, FILE_FORMAT format) override;
     void stopRecording() override;
     void takeScreenshot(const QString &imageFile) override;
+    void updateAudioVolume();
 
 private slots:
     void _watchdog();
@@ -85,6 +86,9 @@ private:
     void _noteTeeFrame();
     void _noteVideoSinkFrame();
     void _noteEndOfStream();
+    bool _addAudioSink(GstPad *pad);
+    void _updateAudioVolume();
+    void _shutdownAudioBranch();
     /// -Unlink the branch from the src pad
     /// -Send an EOS event at the beginning of that branch
     bool _unlinkBranch(GstElement *from);
@@ -99,6 +103,7 @@ private:
     static void _onNewPad(GstElement *element, GstPad *pad, gpointer data);
     static void _wrapWithGhostPad(GstElement *element, GstPad *pad, gpointer data);
     static void _linkPad(GstElement *element, GstPad *pad, gpointer data);
+    static void _onRtspPadAdded(GstElement *element, GstPad *pad, gpointer data);
     static gboolean _padProbe(GstElement *element, GstPad *pad, gpointer user_data);
     static gboolean _filterParserCaps(GstElement *bin, GstPad *pad, GstElement *element, GstQuery *query, gpointer data);
     static GstPadProbeReturn _teeProbe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
@@ -114,9 +119,26 @@ private:
     GstElement *_source = nullptr;
     GstElement *_tee = nullptr;
     GstElement *_videoSink = nullptr;
+    GstElement *_audioTee = nullptr;
+    GstElement *_audioDecoderValve = nullptr;
+    GstElement *_audioRecorderValve = nullptr;
+    GstElement *_audioConvert = nullptr;
+    GstElement *_audioResample = nullptr;
+    GstElement *_audioVolume = nullptr;
+    GstElement *_audioSink = nullptr;
     GstVideoWorker *_worker = nullptr;
     gulong _teeProbeId = 0;
+    gulong _audioTeeProbeId = 0;
     gulong _videoSinkProbeId = 0;
+
+    // Cached audio settings (accessed from worker thread, set from main thread)
+    int _audioVolumePercent = 80;
+
+    // Track if current source is RTSP (for handling stream selection differently)
+    bool _isRtspSource = false;
+
+    // Track if audio decoder has been linked (reset per stream)
+    bool _audioDecoderLinked = false;
 
     static constexpr const char *_kFileMux[FILE_FORMAT_MAX + 1] = {
         "matroskamux",

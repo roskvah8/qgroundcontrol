@@ -21,6 +21,7 @@
 #include "VideoReceiver.h"
 #include "VideoSettings.h"
 #ifdef QGC_GST_STREAMING
+#include "GstVideoReceiver.h"
 #include "GStreamer.h"
 #else
 #include "VideoItemStub.h"
@@ -58,6 +59,8 @@ VideoManager::VideoManager(QObject *parent)
     if (!GStreamer::initialize()) {
         qCCritical(VideoManagerLog) << "Failed To Initialize GStreamer";
     }
+    (void) connect(_videoSettings->audioVolume(), &Fact::rawValueChanged,
+                  this, &VideoManager::_audioVolumeChanged);
 #else
     (void) qmlRegisterType<VideoItemStub>("org.freedesktop.gstreamer.Qt6GLVideoItem", 1, 0, "GstGLQt6VideoItem");
 #endif
@@ -333,6 +336,36 @@ void VideoManager::setfullScreen(bool on)
         _fullScreen = on;
         emit fullScreenChanged();
     }
+}
+
+double VideoManager::audioVolume() const
+{
+    return _videoSettings->audioVolume()->rawValue().toDouble();
+}
+
+bool VideoManager::audioAvailable() const
+{
+    return _audioAvailable;
+}
+
+void VideoManager::setAudioVolume(double volume)
+{
+    _videoSettings->audioVolume()->setRawValue(qBound(0.0, volume, 100.0));
+}
+
+void VideoManager::_audioVolumeChanged()
+{
+    emit audioVolumeChanged(audioVolume());
+
+#ifdef QGC_GST_STREAMING
+    // Update all active video receivers
+    for (VideoReceiver *receiver : std::as_const(_videoReceivers)) {
+        GstVideoReceiver* gstReceiver = qobject_cast<GstVideoReceiver*>(receiver);
+        if (gstReceiver) {
+            gstReceiver->updateAudioVolume();
+        }
+    }
+#endif
 }
 
 bool VideoManager::isStreamSource() const
@@ -757,6 +790,14 @@ void VideoManager::_initVideoReceiver(VideoReceiver *receiver, QQuickWindow *win
                 _subtitleWriter->stopCapturingTelemetry();
             }
             emit recordingChanged(_recording);
+        }
+    });
+
+    (void) connect(receiver, &VideoReceiver::audioAvailableChanged, this, [this, receiver](bool available) {
+        qCDebug(VideoManagerLog) << "Video" << receiver->name() << "audio availability changed, available:" << (available ? "yes" : "no");
+        if (!receiver->isThermal()) {
+            _audioAvailable = available;
+            emit audioAvailableChanged(_audioAvailable);
         }
     });
 
