@@ -20,6 +20,8 @@
 #include "Vehicle.h"
 #include "VideoReceiver.h"
 #include "VideoSettings.h"
+#include "VideoStreamConfiguration.h"
+#include "VideoStreamConfigurationList.h"
 #ifdef QGC_GST_STREAMING
 #include "GstVideoReceiver.h"
 #include "GStreamer.h"
@@ -97,6 +99,10 @@ void VideoManager::init(QQuickWindow *mainWindow)
     (void) connect(_videoSettings->aspectRatio(), &Fact::rawValueChanged, this, &VideoManager::aspectRatioChanged);
     (void) connect(_videoSettings->lowLatencyMode(), &Fact::rawValueChanged, this, [this](const QVariant &value) { Q_UNUSED(value); _restartAllVideos(); });
     (void) connect(MultiVehicleManager::instance(), &MultiVehicleManager::activeVehicleChanged, this, &VideoManager::_setActiveVehicle);
+
+    // Connect to stream configuration changes
+    (void) connect(_videoSettings->streamConfigurations(), &VideoStreamConfigurationList::countChanged, this, &VideoManager::_streamConfigurationsChanged);
+    (void) connect(_videoSettings->streamConfigurations(), &VideoStreamConfigurationList::currentStreamIndexChanged, this, &VideoManager::_streamConfigurationsChanged);
 
     (void) connect(this, &VideoManager::autoStreamConfiguredChanged, this, &VideoManager::_videoSourceChanged);
 
@@ -528,6 +534,11 @@ bool VideoManager::_updateVideoUri(VideoReceiver *receiver, const QString &uri)
 
     qCDebug(VideoManagerLog) << "New Video URI" << uri;
 
+    // If clearing the URI, stop the receiver first to avoid warnings
+    if (uri.isEmpty() && receiver->started()) {
+        receiver->stop();
+    }
+
     receiver->setUri(uri);
 
     return true;
@@ -553,36 +564,37 @@ bool VideoManager::_updateSettings(VideoReceiver *receiver)
     }
 
     settingsChanged |= _updateUVC(receiver);
-    settingsChanged |= _updateAutoStream(receiver);
 
-    const QString source = _videoSettings->videoSource()->rawValue().toString();
-    if (source == VideoSettings::videoSourceUDPH264) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("udp://%1").arg(_videoSettings->udpUrl()->rawValue().toString()));
-    } else if (source == VideoSettings::videoSourceUDPH265) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("udp265://%1").arg(_videoSettings->udpUrl()->rawValue().toString()));
-    } else if (source == VideoSettings::videoSourceMPEGTS) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("mpegts://%1").arg(_videoSettings->udpUrl()->rawValue().toString()));
-    } else if (source == VideoSettings::videoSourceRTSP) {
-        settingsChanged |= _updateVideoUri(receiver, _videoSettings->rtspUrl()->rawValue().toString());
-    } else if (source == VideoSettings::videoSourceTCP) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("tcp://%1").arg(_videoSettings->tcpUrl()->rawValue().toString()));
-    } else if (source == VideoSettings::videoSource3DRSolo) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("udp://0.0.0.0:5600"));
-    } else if (source == VideoSettings::videoSourceParrotDiscovery) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("udp://0.0.0.0:8888"));
-    } else if (source == VideoSettings::videoSourceYuneecMantisG) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("rtsp://192.168.42.1:554/live"));
-    } else if (source == VideoSettings::videoSourceHerelinkAirUnit) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("rtsp://192.168.0.10:8554/H264Video"));
-    } else if (source == VideoSettings::videoSourceHerelinkHotspot) {
-        settingsChanged |= _updateVideoUri(receiver, QStringLiteral("rtsp://192.168.43.1:8554/fpv_stream"));
-    } else if ((source == VideoSettings::videoDisabled) || (source == VideoSettings::videoSourceNoVideo)) {
-        settingsChanged |= _updateVideoUri(receiver, QString());
-    } else {
-        settingsChanged |= _updateVideoUri(receiver, QString());
-        if (!isUvc()) {
-            qCCritical(VideoManagerLog) << "Video source URI \"" << source << "\" is not supported. Please add support!";
+    // Priority 1: MAVLink auto-configured streams
+    const bool autoStreamConfigured = _updateAutoStream(receiver);
+    settingsChanged |= autoStreamConfigured;
+
+    // Priority 2: Multi-stream configuration (only way to configure video streams)
+    if (!autoStreamConfigured) {
+        VideoStreamConfigurationList* streamList = _videoSettings->streamConfigurations();
+
+        // If no streams configured or no stream selected, clear video URI
+        if (!streamList || streamList->count() == 0 || streamList->currentStreamIndex() < 0) {
+            qCDebug(VideoManagerLog) << "No streams configured, clearing video URI";
+            settingsChanged |= _updateVideoUri(receiver, QString());
+            return settingsChanged;
         }
+
+        // Try to use the selected stream
+        VideoStreamConfiguration* config = streamList->getStream(streamList->currentStreamIndex());
+        if (config && config->enabled() && config->isValid()) {
+            const QString uri = _buildUriFromStreamConfig(config);
+            if (!uri.isEmpty()) {
+                qCDebug(VideoManagerLog) << "Using stream configuration:" << config->name() << "URI:" << uri;
+                settingsChanged |= _updateVideoUri(receiver, uri);
+                return settingsChanged;
+            }
+        }
+
+        // Stream exists but is disabled or invalid, clear video URI
+        qCDebug(VideoManagerLog) << "Selected stream is disabled or invalid, clearing video URI";
+        settingsChanged |= _updateVideoUri(receiver, QString());
+        return settingsChanged;
     }
 
     return settingsChanged;
@@ -850,6 +862,134 @@ void VideoManager::startVideo()
     }
 
     _restartAllVideos();
+}
+
+bool VideoManager::hasMultipleManualStreams() const
+{
+    VideoStreamConfigurationList* streamList = _videoSettings->streamConfigurations();
+    if (!streamList) {
+        return false;
+    }
+
+    // Count enabled and valid streams only
+    int enabledCount = 0;
+    for (int i = 0; i < streamList->count(); i++) {
+        VideoStreamConfiguration* config = streamList->getStream(i);
+        if (config && config->enabled() && config->isValid()) {
+            enabledCount++;
+        }
+    }
+
+    return enabledCount > 1;
+}
+
+int VideoManager::currentManualStreamIndex() const
+{
+    VideoStreamConfigurationList* streamList = _videoSettings->streamConfigurations();
+    return streamList ? streamList->currentStreamIndex() : -1;
+}
+
+void VideoManager::setCurrentManualStreamIndex(int index)
+{
+    switchToStream(index);
+}
+
+void VideoManager::switchToStream(int streamIndex)
+{
+    qCDebug(VideoManagerLog) << "switchToStream:" << streamIndex;
+
+    // Stop recording if active (per user requirement)
+    if (_recording) {
+        qCDebug(VideoManagerLog) << "Stopping recording before stream switch";
+        stopRecording();
+    }
+
+    // Get stream configuration
+    VideoStreamConfigurationList* streamList = _videoSettings->streamConfigurations();
+    if (!streamList) {
+        emit streamSwitchFailed(tr("Stream configuration list not available"));
+        return;
+    }
+
+    VideoStreamConfiguration* config = streamList->getStream(streamIndex);
+    if (!config) {
+        emit streamSwitchFailed(tr("Invalid stream index: %1").arg(streamIndex));
+        return;
+    }
+
+    if (!config->enabled()) {
+        emit streamSwitchFailed(tr("Stream is disabled: %1").arg(config->name()));
+        return;
+    }
+
+    if (!config->isValid()) {
+        emit streamSwitchFailed(tr("Invalid stream configuration: %1").arg(config->validationError()));
+        return;
+    }
+
+    // Build URI from config
+    const QString uri = _buildUriFromStreamConfig(config);
+    if (uri.isEmpty()) {
+        emit streamSwitchFailed(tr("Failed to build URI from stream configuration"));
+        return;
+    }
+
+    qCDebug(VideoManagerLog) << "Switching to stream:" << config->name() << "URI:" << uri;
+
+    // Get main receiver ("videoContent", index 0)
+    if (_videoReceivers.isEmpty()) {
+        emit streamSwitchFailed(tr("No video receivers available"));
+        return;
+    }
+
+    VideoReceiver* receiver = _videoReceivers[0];
+    if (!receiver || receiver->isThermal()) {
+        emit streamSwitchFailed(tr("Invalid video receiver"));
+        return;
+    }
+
+    // Update URI and restart video
+    if (_updateVideoUri(receiver, uri)) {
+        _restartVideo(receiver);
+    }
+
+    // Save current stream index
+    streamList->setCurrentStreamIndex(streamIndex);
+    emit currentManualStreamIndexChanged(streamIndex);
+}
+
+QString VideoManager::_buildUriFromStreamConfig(VideoStreamConfiguration* config)
+{
+    if (!config) {
+        qCWarning(VideoManagerLog) << "_buildUriFromStreamConfig: null config";
+        return QString();
+    }
+
+    const QString type = config->type();
+    const QString url = config->url();
+
+    if (type == VideoStreamConfiguration::TYPE_RTSP) {
+        return url;
+    } else if (type == VideoStreamConfiguration::TYPE_UDP_H264) {
+        return QStringLiteral("udp://%1").arg(url);
+    } else if (type == VideoStreamConfiguration::TYPE_UDP_H265) {
+        return QStringLiteral("udp265://%1").arg(url);
+    } else if (type == VideoStreamConfiguration::TYPE_TCP) {
+        return QStringLiteral("tcp://%1").arg(url);
+    } else if (type == VideoStreamConfiguration::TYPE_MPEGTS) {
+        return QStringLiteral("mpegts://%1").arg(url);
+    }
+
+    qCWarning(VideoManagerLog) << "Unknown stream type:" << type;
+    return QString();
+}
+
+void VideoManager::_streamConfigurationsChanged()
+{
+    qCDebug(VideoManagerLog) << "_streamConfigurationsChanged";
+
+    emit hasMultipleManualStreamsChanged();
+    _videoSourceChanged();
 }
 
 /*===========================================================================*/
