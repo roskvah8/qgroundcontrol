@@ -52,6 +52,8 @@ class VideoManager : public QObject
     Q_PROPERTY(QString  uvcVideoSourceID        READ uvcVideoSourceID                           NOTIFY uvcVideoSourceIDChanged)
     Q_PROPERTY(double   audioVolume             READ audioVolume            WRITE setAudioVolume NOTIFY audioVolumeChanged)
     Q_PROPERTY(bool     audioAvailable          READ audioAvailable                              NOTIFY audioAvailableChanged)
+    Q_PROPERTY(bool     hasMultipleManualStreams READ hasMultipleManualStreams                   NOTIFY hasMultipleManualStreamsChanged)
+    Q_PROPERTY(int      currentManualStreamIndex READ currentManualStreamIndex WRITE setCurrentManualStreamIndex NOTIFY currentManualStreamIndexChanged)
 
 public:
     explicit VideoManager(QObject *parent = nullptr);
@@ -67,6 +69,7 @@ public:
     Q_INVOKABLE void stopRecording();
     Q_INVOKABLE void stopVideo();
     Q_INVOKABLE void setAudioVolume(double volume);
+    Q_INVOKABLE void switchToStream(int streamIndex);
 
     void init(QQuickWindow *mainWindow);
     void cleanup();
@@ -89,6 +92,9 @@ public:
     void setfullScreen(bool on);
     double audioVolume() const;
     bool audioAvailable() const;
+    bool hasMultipleManualStreams() const;
+    int currentManualStreamIndex() const;
+    void setCurrentManualStreamIndex(int index);
     static bool gstreamerEnabled();
     static bool qtmultimediaEnabled();
     static bool uvcEnabled();
@@ -110,12 +116,16 @@ signals:
     void videoSizeChanged();
     void audioVolumeChanged(double volume);
     void audioAvailableChanged(bool available);
+    void hasMultipleManualStreamsChanged();
+    void currentManualStreamIndexChanged(int index);
+    void streamSwitchFailed(QString reason);
 
 private slots:
     void _communicationLostChanged(bool communicationLost);
     void _setActiveVehicle(Vehicle *vehicle);
     void _videoSourceChanged();
     void _audioVolumeChanged();
+    void _streamConfigurationsChanged();
 
 private:
     void _initAfterQmlIsReady();
@@ -128,6 +138,7 @@ private:
     void _restartVideo(VideoReceiver *receiver);
     void _startReceiver(VideoReceiver *receiver);
     void _stopReceiver(VideoReceiver *receiver);
+    QString _buildUriFromStreamConfig(class VideoStreamConfiguration* config);
     static void _cleanupOldVideos();
 
     QList<VideoReceiver*> _videoReceivers;

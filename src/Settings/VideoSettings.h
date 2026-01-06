@@ -12,6 +12,7 @@
 #include <QtQmlIntegration/QtQmlIntegration>
 
 #include "SettingsGroup.h"
+#include "VideoStreamConfigurationList.h"
 
 class VideoSettings : public SettingsGroup
 {
@@ -41,6 +42,7 @@ public:
     DEFINE_SETTINGFACT(audioVolume)
 
     Q_PROPERTY(bool     streamConfigured        READ streamConfigured       NOTIFY streamConfiguredChanged)
+    Q_PROPERTY(VideoStreamConfigurationList* streamConfigurations READ streamConfigurations CONSTANT)
     Q_PROPERTY(QString  rtspVideoSource         READ rtspVideoSource        CONSTANT)
     Q_PROPERTY(QString  udp264VideoSource       READ udp264VideoSource      CONSTANT)
     Q_PROPERTY(QString  udp265VideoSource       READ udp265VideoSource      CONSTANT)
@@ -49,6 +51,7 @@ public:
     Q_PROPERTY(QString  disabledVideoSource     READ disabledVideoSource    CONSTANT)
 
     bool     streamConfigured       ();
+    VideoStreamConfigurationList* streamConfigurations() { return _streamConfigurations; }
     QString  rtspVideoSource        () { return videoSourceRTSP; }
     QString  udp264VideoSource      () { return videoSourceUDPH264; }
     QString  udp265VideoSource      () { return videoSourceUDPH265; }
@@ -81,5 +84,6 @@ private:
 
 private:
     bool _noVideo = false;
+    VideoStreamConfigurationList* _streamConfigurations = nullptr;
 
 };

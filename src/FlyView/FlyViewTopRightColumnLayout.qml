@@ -39,4 +39,11 @@ ColumnLayout {
             }
         }
     }
+
+    // Stream selector for multi-stream configuration
+    // Only shown when multiple manual streams are configured
+    FlyViewStreamSelector {
+        Layout.alignment: Qt.AlignRight
+        Layout.topMargin: ScreenTools.defaultFontPixelHeight / 2
+    }
 }

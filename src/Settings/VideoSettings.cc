@@ -9,6 +9,7 @@
 
 #include "VideoSettings.h"
 #include "VideoManager.h"
+#include "VideoStreamConfigurationList.h"
 
 #include <QtCore/QVariantList>
 
@@ -65,6 +66,10 @@ DECLARE_SETTINGGROUP(Video, "Video")
 
     // Set default value for videoSource
     _setDefaults();
+
+    // Initialize stream configurations list
+    _streamConfigurations = new VideoStreamConfigurationList(this);
+    _streamConfigurations->loadFromSettings();
 }
 
 void VideoSettings::_setDefaults()
