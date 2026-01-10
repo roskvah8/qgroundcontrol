@@ -53,6 +53,7 @@ add_subdirectory(Utilities)
 add_subdirectory(UTMSP)
 add_subdirectory(Vehicle)
 add_subdirectory(VideoManager)
+add_subdirectory(VoiceStreaming)  # After VideoManager so FindGStreamer has already run
 add_subdirectory(Viewer3D)
 
 # Platform-specific

@@ -46,4 +46,11 @@ ColumnLayout {
         Layout.alignment: Qt.AlignRight
         Layout.topMargin: ScreenTools.defaultFontPixelHeight / 2
     }
+
+    // Voice streaming push-to-talk control
+    // Only shown when voice streaming is enabled
+    FlyViewVoiceStreamingControl {
+        Layout.alignment: Qt.AlignRight
+        Layout.topMargin: ScreenTools.defaultFontPixelHeight / 2
+    }
 }

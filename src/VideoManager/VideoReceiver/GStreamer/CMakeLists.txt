@@ -17,7 +17,7 @@ if(QGC_ENABLE_GST_VIDEOSTREAMING)
         find_package(GStreamer
             REQUIRED
             COMPONENTS Core Base Video Gl GlPrototypes Rtsp
-            OPTIONAL_COMPONENTS GlEgl GlWayland GlX11
+            OPTIONAL_COMPONENTS GlEgl GlWayland GlX11 WebRTC Sdp
         )
     endif()
 

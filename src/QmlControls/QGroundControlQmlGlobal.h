@@ -20,6 +20,7 @@
 Q_DECLARE_LOGGING_CATEGORY(GuidedActionsControllerLog)
 
 class ADSBVehicleManager;
+class VoiceStreamingManager;
 class FactGroup;
 class LinkManager;
 class MissionCommandTree;
@@ -35,6 +36,7 @@ class AirLinkManager;
 class QmlObjectListModel;
 
 Q_MOC_INCLUDE("ADSBVehicleManager.h")
+Q_MOC_INCLUDE("VoiceStreamingManager.h")
 Q_MOC_INCLUDE("FactGroup.h")
 Q_MOC_INCLUDE("LinkManager.h")
 Q_MOC_INCLUDE("MissionCommandTree.h")
@@ -80,6 +82,7 @@ public:
     Q_PROPERTY(VideoManager*        videoManager            READ    videoManager            CONSTANT)
     Q_PROPERTY(SettingsManager*     settingsManager         READ    settingsManager         CONSTANT)
     Q_PROPERTY(ADSBVehicleManager*  adsbVehicleManager      READ    adsbVehicleManager      CONSTANT)
+    Q_PROPERTY(VoiceStreamingManager* voiceStreamingManager READ    voiceStreamingManager   CONSTANT)
     Q_PROPERTY(QGCCorePlugin*       corePlugin              READ    corePlugin              CONSTANT)
     Q_PROPERTY(MissionCommandTree*  missionCommandTree      READ    missionCommandTree      CONSTANT)
 #ifndef QGC_NO_SERIAL_LINK
@@ -177,8 +180,9 @@ public:
 #ifndef QGC_NO_SERIAL_LINK
     FactGroup*              gpsRtkFactGroup     ()  { return _gpsRtkFactGroup; }
 #endif
-    ADSBVehicleManager*     adsbVehicleManager  ()  { return _adsbVehicleManager; }
-    QmlUnitsConversion*     unitsConversion     ()  { return &_unitsConversion; }
+    ADSBVehicleManager*     adsbVehicleManager      ()  { return _adsbVehicleManager; }
+    VoiceStreamingManager*  voiceStreamingManager   ()  { return _voiceStreamingManager; }
+    QmlUnitsConversion*     unitsConversion         ()  { return &_unitsConversion; }
     static QGeoCoordinate   flightMapPosition   ()  { return _coord; }
     static double           flightMapZoom       ()  { return _zoom; }
 
@@ -246,8 +250,9 @@ signals:
 
 private:
     QGCMapEngineManager*    _mapEngineManager       = nullptr;
-    ADSBVehicleManager*     _adsbVehicleManager     = nullptr;
-    QGCPositionManager*     _qgcPositionManager     = nullptr;
+    ADSBVehicleManager*     _adsbVehicleManager         = nullptr;
+    VoiceStreamingManager*  _voiceStreamingManager      = nullptr;
+    QGCPositionManager*     _qgcPositionManager         = nullptr;
     MissionCommandTree*     _missionCommandTree     = nullptr;
     VideoManager*           _videoManager           = nullptr;
     LinkManager*            _linkManager            = nullptr;
