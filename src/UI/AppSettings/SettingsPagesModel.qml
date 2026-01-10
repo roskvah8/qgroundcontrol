@@ -42,6 +42,13 @@ ListModel {
     }
 
     ListElement {
+        name: qsTr("Voice Streaming")
+        url: "qrc:/qml/QGroundControl/AppSettings/VoiceStreamingSettings.qml"
+        iconUrl: "qrc:/InstrumentValueIcons/conversation.svg"
+        pageVisible: function() { return QGroundControl.voiceStreamingManager !== null }
+    }
+
+    ListElement {
         name: "Divider"
     }
 

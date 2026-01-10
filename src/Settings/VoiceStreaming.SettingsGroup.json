@@ -1,0 +1,32 @@
+{
+    "version":      1,
+    "fileType":  "FactMetaData",
+    "QGC.MetaData.Facts":
+[
+{
+    "name": "voiceStreamingEnabled",
+    "shortDesc": "Voice streaming enabled",
+    "longDesc": "Enable push-to-talk voice streaming to remote speaker via WebRTC",
+    "type": "bool",
+    "default": false
+},
+{
+    "name": "voicePeerAddress",
+    "shortDesc": "Voice receiver address",
+    "longDesc": "WebRTC receiver address (HTTP endpoint for signaling)",
+    "type": "string",
+    "default": ""
+},
+{
+    "name": "voiceVolume",
+    "shortDesc": "Voice volume",
+    "longDesc": "Volume level for voice transmission (0-100)",
+    "type": "uint32",
+    "default": 80,
+    "min": 0,
+    "max": 100,
+    "increment": 1,
+    "units": "%"
+}
+]
+}

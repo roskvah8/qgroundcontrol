@@ -27,6 +27,7 @@
 #include <QtCore/private/qthread_p.h>
 
 #include "QGCLogging.h"
+#include "VoiceStreamingManager.h"
 #include "AudioOutput.h"
 #include "FollowMe.h"
 #include "JoystickManager.h"
@@ -266,6 +267,7 @@ void QGCApplication::_initForNormalAppBoot()
     QGCPositionManager::instance()->init();
     LinkManager::instance()->init();
     VideoManager::instance()->init(mainRootWindow());
+    VoiceStreamingManager::instance()->init();
 
     // Image provider for Optical Flow
     _qmlAppEngine->addImageProvider(_qgcImageProviderId, new QGCImageProvider());

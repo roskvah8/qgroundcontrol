@@ -386,7 +386,8 @@ function(find_gstreamer_component component pkgconfig_name)
         string(TOUPPER ${component} upper)
         pkg_check_modules(PC_GSTREAMER_${upper} IMPORTED_TARGET ${pkgconfig_name})
         if(TARGET PkgConfig::PC_GSTREAMER_${upper})
-            qt_add_library(GStreamer::${component} INTERFACE IMPORTED)
+            # Use add_library with GLOBAL to make the target visible outside this function scope
+            add_library(GStreamer::${component} INTERFACE IMPORTED GLOBAL)
             target_link_libraries(GStreamer::${component} INTERFACE PkgConfig::PC_GSTREAMER_${upper})
             if("PC_GSTREAMER_${upper}" MATCHES "PC_GSTREAMER_GL")
                 get_target_property(_qt_incs PkgConfig::PC_GSTREAMER_GL INTERFACE_INCLUDE_DIRECTORIES)
@@ -429,6 +430,14 @@ endif()
 
 if(GlX11 IN_LIST GStreamer_FIND_COMPONENTS)
     find_gstreamer_component(GlX11 gstreamer-gl-x11-1.0)
+endif()
+
+if(WebRTC IN_LIST GStreamer_FIND_COMPONENTS)
+    find_gstreamer_component(WebRTC gstreamer-webrtc-1.0)
+endif()
+
+if(Sdp IN_LIST GStreamer_FIND_COMPONENTS)
+    find_gstreamer_component(Sdp gstreamer-sdp-1.0)
 endif()
 
 # ============================================================================

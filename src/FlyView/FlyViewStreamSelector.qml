@@ -15,7 +15,7 @@ import QGroundControl
 import QGroundControl.Controls
 
 /// Stream selector for switching between manually configured video streams
-/// Displays individual buttons for each stream
+/// Displays stream buttons and volume control
 Column {
     id: _root
     spacing: ScreenTools.defaultFontPixelHeight * 0.25

@@ -33,6 +33,7 @@ qt_add_qml_module(FlyViewModule
         FlyViewMissionCompleteDialog.qml
         FlyViewPreFlightChecklistPopup.qml
         FlyViewStreamSelector.qml
+        FlyViewVoiceStreamingControl.qml
         FlyViewToolStrip.qml
         FlyViewToolStripActionList.qml
         FlyViewTopRightColumnLayout.qml
