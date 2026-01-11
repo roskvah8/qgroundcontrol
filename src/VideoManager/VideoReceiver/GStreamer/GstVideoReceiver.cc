@@ -1237,6 +1237,13 @@ void GstVideoReceiver::_onNewDecoderPad(GstPad *pad)
     // Get pad name for fallback detection
     gchar *padName = gst_pad_get_name(pad);
 
+    // Only process SOURCE pads (decoder outputs), ignore SINK pads (decoder inputs)
+    GstPadDirection padDirection = gst_pad_get_direction(pad);
+    if (padDirection != GST_PAD_SRC) {
+        g_free(padName);
+        return;
+    }
+
     // Determine if this is audio or video pad
     bool isAudio = false;
     bool isVideo = false;
