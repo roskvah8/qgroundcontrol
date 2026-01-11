@@ -65,7 +65,21 @@ void VideoStreamConfigurationList::addStream(const QString& name, const QString&
     // Connect to name changes to update streamNames property
     connect(config, &VideoStreamConfiguration::nameChanged, this, &VideoStreamConfigurationList::_onStreamNameChanged);
 
+    const bool wasEmpty = (count() == 0);
+    const bool hadNoValidSelection = (_currentStreamIndex < 0 || _currentStreamIndex >= count());
+
     append(config);
+
+    // AUTO-SELECT: Select this stream if:
+    // 1. This is the first stream (wasEmpty), OR
+    // 2. No valid stream is currently selected (hadNoValidSelection), AND
+    // 3. The new stream is enabled and valid
+    if ((wasEmpty || hadNoValidSelection) && enabled && config->isValid()) {
+        const int newStreamIndex = count() - 1;
+        setCurrentStreamIndex(newStreamIndex);
+        qCDebug(VideoStreamConfigurationListLog) << "Auto-selected new stream:" << name << "at index" << newStreamIndex;
+    }
+
     saveToSettings();
     emit streamNamesChanged();
 }
@@ -222,72 +236,39 @@ void VideoStreamConfigurationList::loadFromSettings()
     // Load current stream index
     _currentStreamIndex = settings.value(kCurrentStreamIndexKey, -1).toInt();
 
-    // Validate current stream index
-    if (_currentStreamIndex >= count()) {
+    // ENHANCED VALIDATION: Ensure currentStreamIndex points to valid, enabled stream
+    if (_currentStreamIndex >= 0 && _currentStreamIndex < count()) {
+        VideoStreamConfiguration* selectedStream = getStream(_currentStreamIndex);
+        if (!selectedStream || !selectedStream->enabled() || !selectedStream->isValid()) {
+            qCWarning(VideoStreamConfigurationListLog) << "Saved stream index" << _currentStreamIndex
+                                                        << "points to invalid/disabled stream, resetting";
+            _currentStreamIndex = -1;
+        }
+    } else if (_currentStreamIndex >= count()) {
+        qCWarning(VideoStreamConfigurationListLog) << "Saved stream index" << _currentStreamIndex
+                                                    << "out of range (count:" << count() << "), resetting";
         _currentStreamIndex = -1;
     }
 
-    qCDebug(VideoStreamConfigurationListLog) << "Loaded" << count() << "stream configurations from settings";
+    // AUTO-SELECT FALLBACK: If no valid selection but streams exist, pick first valid enabled stream
+    if (_currentStreamIndex < 0 && count() > 0) {
+        for (int i = 0; i < count(); i++) {
+            VideoStreamConfiguration* candidate = getStream(i);
+            if (candidate && candidate->enabled() && candidate->isValid()) {
+                _currentStreamIndex = i;
+                qCDebug(VideoStreamConfigurationListLog) << "Auto-selected first valid stream at index" << i
+                                                          << ":" << candidate->name();
+
+                // Save the auto-selected index
+                QSettings settingsWriter;
+                settingsWriter.setValue(kCurrentStreamIndexKey, _currentStreamIndex);
+                break;
+            }
+        }
+    }
+
+    qCDebug(VideoStreamConfigurationListLog) << "Loaded" << count() << "stream configurations, current index:" << _currentStreamIndex;
     emit streamNamesChanged();
-}
-
-void VideoStreamConfigurationList::migrateFromLegacySettings(VideoSettings* settings)
-{
-    if (!settings) {
-        qCWarning(VideoStreamConfigurationListLog) << "Cannot migrate: null VideoSettings";
-        return;
-    }
-
-    // Check if we already have streams configured (skip migration)
-    if (count() > 0) {
-        qCDebug(VideoStreamConfigurationListLog) << "Stream configurations already exist, skipping migration";
-        return;
-    }
-
-    // Get current video source type
-    const QString videoSource = settings->videoSource()->rawValue().toString();
-
-    // Only migrate if there's an actual video source configured (not disabled or empty)
-    if (videoSource.isEmpty() ||
-        videoSource == settings->disabledVideoSource() ||
-        videoSource == VideoSettings::videoSourceNoVideo) {
-        qCDebug(VideoStreamConfigurationListLog) << "No legacy video source configured, skipping migration";
-        return;
-    }
-
-    QString url;
-    QString streamType;
-
-    // Determine URL and type based on video source
-    if (videoSource == settings->rtspVideoSource()) {
-        url = settings->rtspUrl()->rawValue().toString();
-        streamType = VideoStreamConfiguration::TYPE_RTSP;
-    } else if (videoSource == settings->udp264VideoSource()) {
-        url = settings->udpUrl()->rawValue().toString();
-        streamType = VideoStreamConfiguration::TYPE_UDP_H264;
-    } else if (videoSource == settings->udp265VideoSource()) {
-        url = settings->udpUrl()->rawValue().toString();
-        streamType = VideoStreamConfiguration::TYPE_UDP_H265;
-    } else if (videoSource == settings->tcpVideoSource()) {
-        url = settings->tcpUrl()->rawValue().toString();
-        streamType = VideoStreamConfiguration::TYPE_TCP;
-    } else if (videoSource == settings->mpegtsVideoSource()) {
-        url = settings->udpUrl()->rawValue().toString();
-        streamType = VideoStreamConfiguration::TYPE_MPEGTS;
-    } else {
-        qCDebug(VideoStreamConfigurationListLog) << "Unknown video source type, skipping migration:" << videoSource;
-        return;
-    }
-
-    // Only create migration stream if URL is not empty
-    if (!url.isEmpty()) {
-        qCDebug(VideoStreamConfigurationListLog) << "Migrating legacy video configuration:" << streamType << url;
-
-        addStream(tr("Default Stream"), streamType, url, true);
-        setCurrentStreamIndex(0);
-
-        qCInfo(VideoStreamConfigurationListLog) << "Successfully migrated legacy video configuration to multi-stream";
-    }
 }
 
 void VideoStreamConfigurationList::_onStreamNameChanged()

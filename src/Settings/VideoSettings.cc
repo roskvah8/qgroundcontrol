@@ -10,6 +10,7 @@
 #include "VideoSettings.h"
 #include "VideoManager.h"
 #include "VideoStreamConfigurationList.h"
+#include "VideoStreamConfiguration.h"
 
 #include <QtCore/QVariantList>
 
@@ -197,47 +198,33 @@ bool VideoSettings::streamConfigured(void)
         qCDebug(VideoManagerLog) << "Stream auto configured";
         return true;
     }
-    //-- Check if it's disabled
-    QString vSource = videoSource()->rawValue().toString();
-    if(vSource == videoSourceNoVideo || vSource == videoDisabled) {
+
+    //-- Check new multi-stream configuration list
+    if (!_streamConfigurations) {
+        qCDebug(VideoManagerLog) << "streamConfigured: _streamConfigurations is NULL";
         return false;
     }
-    //-- If UDP, check for URL
-    if(vSource == videoSourceUDPH264 || vSource == videoSourceUDPH265) {
-        qCDebug(VideoManagerLog) << "Testing configuration for UDP Stream:" << udpUrl()->rawValue().toString();
-        return !udpUrl()->rawValue().toString().isEmpty();
+
+    int streamCount = _streamConfigurations->count();
+    qCDebug(VideoManagerLog) << "streamConfigured: checking" << streamCount << "streams";
+
+    if (streamCount > 0) {
+        // Check if there's at least one enabled stream
+        for (int i = 0; i < streamCount; i++) {
+            auto* stream = qobject_cast<VideoStreamConfiguration*>(_streamConfigurations->get(i));
+            if (!stream) {
+                qCWarning(VideoManagerLog) << "Stream" << i << "cast failed";
+                continue;
+            }
+
+            if (stream->enabled() && stream->isValid()) {
+                qCDebug(VideoManagerLog) << "Stream configured:" << stream->name();
+                return true;
+            }
+        }
+        qCDebug(VideoManagerLog) << "No enabled & valid streams found";
     }
-    //-- If RTSP, check for URL
-    if(vSource == videoSourceRTSP) {
-        qCDebug(VideoManagerLog) << "Testing configuration for RTSP Stream:" << rtspUrl()->rawValue().toString();
-        return !rtspUrl()->rawValue().toString().isEmpty();
-    }
-    //-- If TCP, check for URL
-    if(vSource == videoSourceTCP) {
-        qCDebug(VideoManagerLog) << "Testing configuration for TCP Stream:" << tcpUrl()->rawValue().toString();
-        return !tcpUrl()->rawValue().toString().isEmpty();
-    }
-    //-- If MPEG-TS, check for URL
-    if(vSource == videoSourceMPEGTS) {
-        qCDebug(VideoManagerLog) << "Testing configuration for MPEG-TS Stream:" << udpUrl()->rawValue().toString();
-        return !udpUrl()->rawValue().toString().isEmpty();
-    }
-    //-- If Herelink Air unit, good to go
-    if(vSource == videoSourceHerelinkAirUnit) {
-        qCDebug(VideoManagerLog) << "Stream configured for Herelink Air Unit";
-        return true;
-    }
-    //-- If Herelink Hotspot, good to go
-    if(vSource == videoSourceHerelinkHotspot) {
-        qCDebug(VideoManagerLog) << "Stream configured for Herelink Hotspot";
-        return true;
-    }
-#ifndef QGC_DISABLE_UVC
-    if (UVCReceiver::enabled() && UVCReceiver::deviceExists(vSource)) {
-        qCDebug(VideoManagerLog) << "Stream configured for UVC";
-        return true;
-    }
-#endif
+
     return false;
 }
 

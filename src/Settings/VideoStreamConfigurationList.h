@@ -21,7 +21,7 @@ class VideoSettings;
 class VideoStreamConfiguration;
 
 /// Manages a list of video stream configurations
-/// Provides persistence to QSettings and migration from legacy single-stream settings
+/// Provides persistence to QSettings
 class VideoStreamConfigurationList : public QmlObjectListModel
 {
     Q_OBJECT
@@ -53,7 +53,6 @@ public:
     // Persistence
     Q_INVOKABLE void saveToSettings();
     Q_INVOKABLE void loadFromSettings();
-    Q_INVOKABLE void migrateFromLegacySettings(VideoSettings* settings);
 
 signals:
     void currentStreamIndexChanged(int index);
