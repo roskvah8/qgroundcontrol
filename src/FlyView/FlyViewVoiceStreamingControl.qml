@@ -34,9 +34,9 @@ FocusScope {
 
     visible: _voiceStreamingManager && _voiceStreamingEnabled
 
-    // Keyboard handler for push-to-talk (hold spacebar to transmit)
+    // Keyboard handler for push-to-talk (hold T key to transmit)
     Keys.onPressed: (event) => {
-        if (event.key === Qt.Key_Space && !event.isAutoRepeat && event.modifiers === Qt.NoModifier) {
+        if (event.key === Qt.Key_T && !event.isAutoRepeat && event.modifiers === Qt.NoModifier) {
             if (_voiceStreamingManager && _voiceStreamingManager.streaming && _voiceStreamingManager.connected) {
                 event.accepted = true
                 _voiceStreamingManager.pushToTalkActive = true
@@ -45,7 +45,7 @@ FocusScope {
     }
 
     Keys.onReleased: (event) => {
-        if (event.key === Qt.Key_Space && !event.isAutoRepeat) {
+        if (event.key === Qt.Key_T && !event.isAutoRepeat) {
             if (_voiceStreamingManager && _voiceStreamingManager.streaming && _voiceStreamingManager.connected) {
                 event.accepted = true
                 _voiceStreamingManager.pushToTalkActive = false
@@ -128,10 +128,10 @@ FocusScope {
                 }
             }
 
-            // Space bar hint
+            // T key hint
             QGCLabel {
                 width: parent.width
-                text: qsTr("Hold Space")
+                text: qsTr("Hold T")
                 color: "#AAAAAA"
                 font.pointSize: ScreenTools.smallFontPointSize * 0.8
                 horizontalAlignment: Text.AlignHCenter
