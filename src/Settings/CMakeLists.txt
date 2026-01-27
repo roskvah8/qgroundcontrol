@@ -49,6 +49,10 @@ target_sources(${CMAKE_PROJECT_NAME}
         UnitsSettings.h
         VideoSettings.cc
         VideoSettings.h
+        ServoButtonConfiguration.cc
+        ServoButtonConfiguration.h
+        ServoButtonConfigurationList.cc
+        ServoButtonConfigurationList.h
         VideoStreamConfiguration.cc
         VideoStreamConfiguration.h
         VideoStreamConfigurationList.cc

@@ -35,6 +35,7 @@ class RemoteIDSettings;
 class RTKSettings;
 class UnitsSettings;
 class NTRIPSettings;
+class ServoButtonConfigurationList;
 class VideoSettings;
 class Viewer3DSettings;
 class MavlinkSettings;
@@ -71,6 +72,7 @@ class SettingsManager : public QObject
     Q_MOC_INCLUDE("UnitsSettings.h")
     Q_MOC_INCLUDE("NTRIPSettings.h")
     Q_MOC_INCLUDE("VideoSettings.h")
+    Q_MOC_INCLUDE("ServoButtonConfigurationList.h")
     Q_MOC_INCLUDE("MavlinkSettings.h")
 #ifdef QGC_VIEWER3D
     Q_MOC_INCLUDE("Viewer3DSettings.h")
@@ -98,6 +100,7 @@ class SettingsManager : public QObject
     Q_PROPERTY(QObject *unitsSettings                   READ unitsSettings                  CONSTANT)
     Q_PROPERTY(QObject *ntripSettings                   READ ntripSettings                  CONSTANT)
     Q_PROPERTY(QObject *videoSettings                   READ videoSettings                  CONSTANT)
+    Q_PROPERTY(QObject *servoButtonConfigurations       READ servoButtonConfigurations       CONSTANT)
     Q_PROPERTY(QObject *mavlinkSettings                 READ mavlinkSettings                CONSTANT)
 #ifdef QGC_VIEWER3D
     Q_PROPERTY(QObject *viewer3DSettings                READ viewer3DSettings               CONSTANT)
@@ -140,6 +143,7 @@ public:
     UnitsSettings *unitsSettings() const;
     NTRIPSettings *ntripSettings() const;
     VideoSettings *videoSettings() const;
+    ServoButtonConfigurationList *servoButtonConfigurations() const;
     MavlinkSettings *mavlinkSettings() const;
 #ifdef QGC_VIEWER3D
     Viewer3DSettings *viewer3DSettings() const;
@@ -171,6 +175,7 @@ private:
     UnitsSettings *_unitsSettings = nullptr;
     NTRIPSettings *_ntripSettings = nullptr;
     VideoSettings *_videoSettings = nullptr;
+    ServoButtonConfigurationList *_servoButtonConfigurations = nullptr;
     MavlinkSettings *_mavlinkSettings = nullptr;
 #ifdef QGC_VIEWER3D
     Viewer3DSettings *_viewer3DSettings = nullptr;
