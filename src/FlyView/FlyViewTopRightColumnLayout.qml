@@ -53,4 +53,10 @@ ColumnLayout {
         Layout.alignment: Qt.AlignRight
         Layout.topMargin: ScreenTools.defaultFontPixelHeight / 2
     }
+
+    // Configurable servo button controls
+    FlyViewServoControl {
+        Layout.alignment: Qt.AlignRight
+        Layout.topMargin: ScreenTools.defaultFontPixelHeight / 2
+    }
 }

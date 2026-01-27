@@ -235,6 +235,14 @@ Rectangle {
                 property bool   _forcedToButtonsOnly:   !QGroundControl.corePlugin.options.allowJoystickSelection && _buttonsOnly
             }
 
+            ConfigButton {
+                id:                 servoButton
+                text:               qsTr("Servo")
+                visible:            QGroundControl.multiVehicleManager.parameterReadyVehicleAvailable
+                Layout.fillWidth:   true
+                onClicked:          showPanel(this, "qrc:/qml/QGroundControl/VehicleSetup/ServoSetup.qml")
+            }
+
             Repeater {
                 id:     componentRepeater
                 model:  _fullParameterVehicleAvailable ? _activeVehicle.autopilotPlugin.vehicleComponents : 0
