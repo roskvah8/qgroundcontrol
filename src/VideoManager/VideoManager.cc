@@ -9,6 +9,7 @@
 
 #include "VideoManager.h"
 #include "AppSettings.h"
+#include "ExternalAudioPlayer.h"
 #include "MavlinkCameraControl.h"
 #include "MultiVehicleManager.h"
 #include "QGCApplication.h"
@@ -52,6 +53,7 @@ VideoManager::VideoManager(QObject *parent)
     : QObject(parent)
     , _subtitleWriter(new SubtitleWriter(this))
     , _videoSettings(SettingsManager::instance()->videoSettings())
+    , _externalAudioPlayer(new ExternalAudioPlayer(this))
 {
     qCDebug(VideoManagerLog) << this;
 
@@ -66,6 +68,16 @@ VideoManager::VideoManager(QObject *parent)
 #else
     (void) qmlRegisterType<VideoItemStub>("org.freedesktop.gstreamer.Qt6GLVideoItem", 1, 0, "GstGLQt6VideoItem");
 #endif
+
+    (void) connect(_externalAudioPlayer, &ExternalAudioPlayer::playingChanged, this, [this](bool playing) {
+        qCDebug(VideoManagerLog) << "External audio playing:" << (playing ? "yes" : "no");
+        _audioAvailable = playing;
+        emit audioAvailableChanged(_audioAvailable);
+    });
+
+    (void) connect(_externalAudioPlayer, &ExternalAudioPlayer::errorOccurred, this, [](const QString &error) {
+        qCWarning(VideoManagerLog) << "External audio error:" << error;
+    });
 }
 
 VideoManager::~VideoManager()
@@ -372,6 +384,11 @@ void VideoManager::_audioVolumeChanged()
         }
     }
 #endif
+
+    // Update external audio player volume
+    if (_externalAudioPlayer) {
+        _externalAudioPlayer->setVolume(static_cast<int>(audioVolume()));
+    }
 }
 
 bool VideoManager::isStreamSource() const
@@ -586,6 +603,10 @@ bool VideoManager::_updateSettings(VideoReceiver *receiver)
             const QString uri = _buildUriFromStreamConfig(config);
             if (!uri.isEmpty()) {
                 qCDebug(VideoManagerLog) << "Using stream configuration:" << config->name() << "URI:" << uri;
+
+                // Configure external audio for this stream
+                _configureExternalAudio(config, receiver);
+
                 settingsChanged |= _updateVideoUri(receiver, uri);
                 return settingsChanged;
             }
@@ -697,6 +718,10 @@ void VideoManager::stopVideo()
     for (VideoReceiver *receiver : std::as_const(_videoReceivers)) {
         _stopReceiver(receiver);
     }
+
+    if (_externalAudioPlayer) {
+        _externalAudioPlayer->stop();
+    }
 }
 
 void VideoManager::_startReceiver(VideoReceiver *receiver)
@@ -754,6 +779,16 @@ void VideoManager::_initVideoReceiver(VideoReceiver *receiver, QQuickWindow *win
             receiver->setStarted(true);
             if (receiver->sink()) {
                 receiver->startDecoding(receiver->sink());
+            }
+            // Start external audio if configured for the current stream
+            if (!receiver->isThermal() && _externalAudioPlayer && !_externalAudioPlayer->isPlaying()) {
+                VideoStreamConfigurationList *streamList = _videoSettings->streamConfigurations();
+                if (streamList && streamList->currentStreamIndex() >= 0) {
+                    VideoStreamConfiguration *config = streamList->getStream(streamList->currentStreamIndex());
+                    if (config && config->hasExternalAudio()) {
+                        _externalAudioPlayer->start(config->externalAudioUrl());
+                    }
+                }
             }
             break;
         case VideoReceiver::STATUS_INVALID_URL:
@@ -904,6 +939,11 @@ void VideoManager::switchToStream(int streamIndex)
         stopRecording();
     }
 
+    // Stop any existing external audio
+    if (_externalAudioPlayer) {
+        _externalAudioPlayer->stop();
+    }
+
     // Get stream configuration
     VideoStreamConfigurationList* streamList = _videoSettings->streamConfigurations();
     if (!streamList) {
@@ -948,9 +988,17 @@ void VideoManager::switchToStream(int streamIndex)
         return;
     }
 
+    // Configure external audio (suppress RTSP audio if external source is set)
+    _configureExternalAudio(config, receiver);
+
     // Update URI and restart video
     if (_updateVideoUri(receiver, uri)) {
         _restartVideo(receiver);
+    }
+
+    // Start external audio after video is configured
+    if (_externalAudioPlayer && config->hasExternalAudio()) {
+        _externalAudioPlayer->start(config->externalAudioUrl());
     }
 
     // Save current stream index
@@ -982,6 +1030,26 @@ QString VideoManager::_buildUriFromStreamConfig(VideoStreamConfiguration* config
 
     qCWarning(VideoManagerLog) << "Unknown stream type:" << type;
     return QString();
+}
+
+void VideoManager::_configureExternalAudio(VideoStreamConfiguration *config, VideoReceiver *receiver)
+{
+#ifdef QGC_GST_STREAMING
+    GstVideoReceiver *gstReceiver = qobject_cast<GstVideoReceiver *>(receiver);
+    if (!gstReceiver) {
+        return;
+    }
+
+    if (config && config->hasExternalAudio()) {
+        qCDebug(VideoManagerLog) << "External audio configured:" << config->externalAudioUrl();
+        gstReceiver->setSuppressRtspAudio(true);
+    } else {
+        gstReceiver->setSuppressRtspAudio(false);
+    }
+#else
+    Q_UNUSED(config)
+    Q_UNUSED(receiver)
+#endif
 }
 
 void VideoManager::_streamConfigurationsChanged()

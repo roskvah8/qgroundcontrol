@@ -25,14 +25,15 @@ class VideoStreamConfiguration : public QObject
     QML_ELEMENT
     QML_UNCREATABLE("VideoStreamConfiguration should not be created in QML")
 
-    Q_PROPERTY(QString name     READ name      WRITE setName      NOTIFY nameChanged)
-    Q_PROPERTY(QString type     READ type      WRITE setType      NOTIFY typeChanged)
-    Q_PROPERTY(QString url      READ url       WRITE setUrl       NOTIFY urlChanged)
-    Q_PROPERTY(bool    enabled  READ enabled   WRITE setEnabled   NOTIFY enabledChanged)
+    Q_PROPERTY(QString name             READ name             WRITE setName             NOTIFY nameChanged)
+    Q_PROPERTY(QString type             READ type             WRITE setType             NOTIFY typeChanged)
+    Q_PROPERTY(QString url              READ url              WRITE setUrl              NOTIFY urlChanged)
+    Q_PROPERTY(bool    enabled          READ enabled          WRITE setEnabled          NOTIFY enabledChanged)
+    Q_PROPERTY(QString externalAudioUrl READ externalAudioUrl WRITE setExternalAudioUrl NOTIFY externalAudioUrlChanged)
 
 public:
     explicit VideoStreamConfiguration(QObject* parent = nullptr);
-    VideoStreamConfiguration(const QString& name, const QString& type, const QString& url, bool enabled, QObject* parent = nullptr);
+    VideoStreamConfiguration(const QString& name, const QString& type, const QString& url, bool enabled, const QString& externalAudioUrl = QString(), QObject* parent = nullptr);
     ~VideoStreamConfiguration() override = default;
 
     // Stream type constants (matching VideoSettings)
@@ -47,11 +48,14 @@ public:
     QString type() const { return _type; }
     QString url() const { return _url; }
     bool enabled() const { return _enabled; }
+    QString externalAudioUrl() const { return _externalAudioUrl; }
+    bool hasExternalAudio() const { return !_externalAudioUrl.trimmed().isEmpty(); }
 
     void setName(const QString& name);
     void setType(const QString& type);
     void setUrl(const QString& url);
     void setEnabled(bool enabled);
+    void setExternalAudioUrl(const QString& externalAudioUrl);
 
     // JSON serialization
     [[nodiscard]] QJsonObject toJson() const;
@@ -66,10 +70,12 @@ signals:
     void typeChanged(QString type);
     void urlChanged(QString url);
     void enabledChanged(bool enabled);
+    void externalAudioUrlChanged(QString externalAudioUrl);
 
 private:
     QString _name;
     QString _type;
     QString _url;
     bool _enabled = true;
+    QString _externalAudioUrl;
 };
