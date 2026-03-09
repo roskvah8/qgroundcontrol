@@ -52,9 +52,9 @@ void VideoStreamConfigurationList::setCurrentStreamIndex(int index)
     }
 }
 
-void VideoStreamConfigurationList::addStream(const QString& name, const QString& type, const QString& url, bool enabled)
+void VideoStreamConfigurationList::addStream(const QString& name, const QString& type, const QString& url, bool enabled, const QString& externalAudioUrl)
 {
-    auto* config = new VideoStreamConfiguration(name, type, url, enabled, this);
+    auto* config = new VideoStreamConfiguration(name, type, url, enabled, externalAudioUrl, this);
 
     if (!config->isValid()) {
         qCWarning(VideoStreamConfigurationListLog) << "Cannot add invalid stream configuration:" << config->validationError();

@@ -222,13 +222,15 @@ SettingsPage {
                     originalStream.type = streamTypeCombo.currentValue
                     originalStream.url = streamUrlField.text.trim()
                     originalStream.enabled = streamEnabledCheckBox.checked
+                    originalStream.externalAudioUrl = externalAudioUrlField.text.trim()
                 } else {
                     // Add new stream
                     _videoSettings.streamConfigurations.addStream(
                         streamNameField.text.trim(),
                         streamTypeCombo.currentValue,
                         streamUrlField.text.trim(),
-                        streamEnabledCheckBox.checked
+                        streamEnabledCheckBox.checked,
+                        externalAudioUrlField.text.trim()
                     )
                 }
                 _videoSettings.streamConfigurations.saveToSettings()
@@ -392,6 +394,41 @@ SettingsPage {
                             color: qgcPal.warningText
                             wrapMode: Text.WordWrap
                             visible: validationError
+                        }
+                    }
+                }
+
+                // Section 4: External Audio Source
+                SettingsGroupLayout {
+                    Layout.fillWidth: true
+                    heading: qsTr("External Audio Source")
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: ScreenTools.defaultFontPixelHeight / 2
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: ScreenTools.defaultFontPixelWidth
+
+                            QGCLabel {
+                                text: qsTr("Audio URL")
+                                Layout.preferredWidth: ScreenTools.defaultFontPixelWidth * 10
+                            }
+
+                            QGCTextField {
+                                id: externalAudioUrlField
+                                Layout.fillWidth: true
+                                text: originalStream ? originalStream.externalAudioUrl : ""
+                                placeholderText: "rtsp://192.168.1.50:8554/audio"
+                            }
+                        }
+
+                        QGCLabel {
+                            Layout.fillWidth: true
+                            text: qsTr("RTSP audio URL from external source (e.g., Raspberry Pi with USB mic). Leave empty to use camera audio.")
+                            wrapMode: Text.WordWrap
+                            font.pointSize: ScreenTools.smallFontPointSize
                         }
                     }
                 }

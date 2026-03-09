@@ -635,6 +635,12 @@ void GstVideoReceiver::takeScreenshot(const QString &imageFile)
     _dispatchSignal([this]() { emit onTakeScreenshotComplete(STATUS_NOT_IMPLEMENTED); });
 }
 
+void GstVideoReceiver::setSuppressRtspAudio(bool suppress)
+{
+    _suppressRtspAudio = suppress;
+    qCDebug(GstVideoReceiverLog) << "RTSP audio suppression:" << (suppress ? "enabled" : "disabled");
+}
+
 void GstVideoReceiver::updateAudioVolume()
 {
     // This is called from main thread - safe to access VideoSettings
@@ -1112,6 +1118,12 @@ void GstVideoReceiver::_onNewSourcePad(GstPad *pad)
         qCDebug(GstVideoReceiverLog) << "Video decoding started";
 
     } else if (isAudio) {
+        if (_suppressRtspAudio) {
+            qCDebug(GstVideoReceiverLog) << "RTSP audio suppressed (external audio source configured)";
+            g_free(padName);
+            return;
+        }
+
         if (!_audioTee) {
             qCCritical(GstVideoReceiverLog) << "ERROR: _audioTee is NULL!";
             g_free(padName);

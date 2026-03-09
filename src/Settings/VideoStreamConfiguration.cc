@@ -20,12 +20,13 @@ VideoStreamConfiguration::VideoStreamConfiguration(QObject* parent)
 {
 }
 
-VideoStreamConfiguration::VideoStreamConfiguration(const QString& name, const QString& type, const QString& url, bool enabled, QObject* parent)
+VideoStreamConfiguration::VideoStreamConfiguration(const QString& name, const QString& type, const QString& url, bool enabled, const QString& externalAudioUrl, QObject* parent)
     : QObject(parent)
     , _name(name)
     , _type(type)
     , _url(url)
     , _enabled(enabled)
+    , _externalAudioUrl(externalAudioUrl)
 {
 }
 
@@ -61,6 +62,14 @@ void VideoStreamConfiguration::setEnabled(bool enabled)
     }
 }
 
+void VideoStreamConfiguration::setExternalAudioUrl(const QString& externalAudioUrl)
+{
+    if (_externalAudioUrl != externalAudioUrl) {
+        _externalAudioUrl = externalAudioUrl;
+        emit externalAudioUrlChanged(_externalAudioUrl);
+    }
+}
+
 QJsonObject VideoStreamConfiguration::toJson() const
 {
     QJsonObject json;
@@ -68,6 +77,9 @@ QJsonObject VideoStreamConfiguration::toJson() const
     json["type"] = _type;
     json["url"] = _url;
     json["enabled"] = _enabled;
+    if (!_externalAudioUrl.isEmpty()) {
+        json["externalAudioUrl"] = _externalAudioUrl;
+    }
     return json;
 }
 
@@ -82,8 +94,9 @@ VideoStreamConfiguration* VideoStreamConfiguration::fromJson(const QJsonObject& 
     const QString type = json["type"].toString();
     const QString url = json["url"].toString();
     const bool enabled = json.value("enabled").toBool(true); // Default to true if missing
+    const QString externalAudioUrl = json.value("externalAudioUrl").toString();
 
-    auto* config = new VideoStreamConfiguration(name, type, url, enabled, parent);
+    auto* config = new VideoStreamConfiguration(name, type, url, enabled, externalAudioUrl, parent);
 
     if (!config->isValid()) {
         qCWarning(VideoStreamConfigurationLog) << "Invalid configuration loaded from JSON:" << config->validationError();

@@ -42,7 +42,7 @@ public:
     void setCurrentStreamIndex(int index);
 
     // Stream management
-    Q_INVOKABLE void addStream(const QString& name, const QString& type, const QString& url, bool enabled = true);
+    Q_INVOKABLE void addStream(const QString& name, const QString& type, const QString& url, bool enabled = true, const QString& externalAudioUrl = QString());
     Q_INVOKABLE void removeStream(int index);
     Q_INVOKABLE VideoStreamConfiguration* getStream(int index);
     Q_INVOKABLE void moveStreamUp(int index);

@@ -60,6 +60,8 @@ public:
     explicit GstVideoReceiver(QObject *parent = nullptr);
     ~GstVideoReceiver();
 
+    void setSuppressRtspAudio(bool suppress);
+
 public slots:
     void start(uint32_t timeout) override;
     void stop() override;
@@ -139,6 +141,9 @@ private:
 
     // Track if audio decoder has been linked (reset per stream)
     bool _audioDecoderLinked = false;
+
+    // When true, RTSP audio pads are ignored (external audio source is used instead)
+    bool _suppressRtspAudio = false;
 
     static constexpr const char *_kFileMux[FILE_FORMAT_MAX + 1] = {
         "matroskamux",

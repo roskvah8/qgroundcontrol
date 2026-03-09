@@ -17,6 +17,7 @@
 
 Q_DECLARE_LOGGING_CATEGORY(VideoManagerLog)
 
+class ExternalAudioPlayer;
 class QQuickWindow;
 class FinishVideoInitialization;
 class SubtitleWriter;
@@ -141,10 +142,13 @@ private:
     QString _buildUriFromStreamConfig(class VideoStreamConfiguration* config);
     static void _cleanupOldVideos();
 
+    void _configureExternalAudio(class VideoStreamConfiguration *config, VideoReceiver *receiver);
+
     QList<VideoReceiver*> _videoReceivers;
 
     SubtitleWriter *_subtitleWriter = nullptr;
     VideoSettings *_videoSettings = nullptr;
+    ExternalAudioPlayer *_externalAudioPlayer = nullptr;
 
     bool _initialized = false;
     bool _initAfterQmlIsReadyDone = false;
